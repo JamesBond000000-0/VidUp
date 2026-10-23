@@ -16,3 +16,18 @@
 
 注意: BrokenJson_TruncatedUploads の uploads.json だけは意図的に JSON として不正。
 それ以外のファイルはすべて JSON としては正しい（意味的に壊れている、が区別点）。
+
+## Phase 2 での実測結果（2026-10-23）
+
+検証ハーネス（VidUp.Json を直接実行し、各資産で `JsonDeserializationContent.Deserialize` を回す）で実測。
+
+| フォルダ | 修正前（実測） | 修正後（実測） |
+|---|---|---|
+| BrokenJson_UnknownCategoryId | InvalidOperationException（Sequence contains no elements）で読込失敗 | 読込成功。カテゴリは null にフォールバックし AllUploads/TemplateList の再シリアライズフラグが立つ |
+| BrokenJson_TemplateMismatch | InvalidOperationException（Collection was modified）で読込失敗 | 読込成功。不整合が補正され、状態が収束する（First に1件・template=First、Second は空） |
+| BrokenJson_MalformedGuids | JsonSerializationException（Guid 変換）で読込失敗 | 読込成功。壊れた GUID のアップロードだけ除去、空アカウントは代替アカウントへ寄せ、正常レコードは無事 |
+| BrokenJson_ExplicitNulls | NullReferenceException で読込失敗 | 読込成功。tags/statusInformation/uploads の null は空に正規化 |
+| BrokenJson_TemplatesNull | NullReferenceException で読込失敗 | 読込成功（テンプレート0件として扱う） |
+| BrokenJson_TruncatedUploads | JsonSerializationException で読込失敗 | .bak があればフォールバック回復。無い場合は uploads 空で起動継続（部分的に読めたレコードの救済はしない） |
+
+正常な設定（BasicTests_RemoveUploadFinishedWithoutTemplate）の読込結果は修正前後で同一であることも確認済み。
