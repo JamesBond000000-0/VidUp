@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using Drexel.VidUp.Business;
 using Drexel.VidUp.Utils;
@@ -14,7 +15,7 @@ namespace Drexel.VidUp.Youtube.ThumbnailService
     {
         private static string thumbnailEndpoint = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set";
 
-        public static async Task<bool> AddThumbnailAsync(Upload upload)
+        public static async Task<bool> AddThumbnailAsync(Upload upload, CancellationToken cancellationToken)
         {
             Tracer.Write($"YoutubeThumbnailService.AddThumbnail: Start.");
 
@@ -37,7 +38,7 @@ namespace Drexel.VidUp.Youtube.ThumbnailService
                             Tracer.Write($"YoutubeThumbnailService.AddThumbnail: Add thumbnail.");
 
                             using (HttpResponseMessage responseMessage = await HttpHelper.StandardClient
-                                .SendAsync(requestMessage).ConfigureAwait(false))
+                                .SendAsync(requestMessage, cancellationToken).ConfigureAwait(false))
                             using (responseMessage.Content)
                             {
                                 string content = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);

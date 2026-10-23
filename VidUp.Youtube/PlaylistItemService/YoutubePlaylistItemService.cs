@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using Drexel.VidUp.Business;
 using Drexel.VidUp.Utils;
@@ -18,7 +19,7 @@ namespace Drexel.VidUp.Youtube.PlaylistItemService
         private static string playlistItemsEndpoint = "https://www.googleapis.com/youtube/v3/playlistItems";
         private static int maxResults = 50;
 
-        public static async Task<AddToPlaylistResult> AddToPlaylistAsync(Upload upload)
+        public static async Task<AddToPlaylistResult> AddToPlaylistAsync(Upload upload, CancellationToken cancellationToken)
         {
             Tracer.Write($"YoutubePlaylistItemService.AddToPlaylist: Start.");
             AddToPlaylistResult result = new AddToPlaylistResult();
@@ -45,7 +46,7 @@ namespace Drexel.VidUp.Youtube.PlaylistItemService
                         {
                             requestMessage.Content = byteContent;
                             Tracer.Write($"YoutubePlaylistItemService.AddToPlaylist: Add to Playlist.");
-                            using (HttpResponseMessage responseMessage = await HttpHelper.StandardClient.SendAsync(requestMessage).ConfigureAwait(false))
+                            using (HttpResponseMessage responseMessage = await HttpHelper.StandardClient.SendAsync(requestMessage, cancellationToken).ConfigureAwait(false))
                             using (responseMessage.Content)
                             {
                                 string content = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);

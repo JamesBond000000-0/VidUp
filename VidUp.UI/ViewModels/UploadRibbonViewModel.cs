@@ -756,12 +756,14 @@ namespace Drexel.VidUp.UI.ViewModels
             this.uploadStatus = UploadStatus.Uploading;
             bool resume = this.resumeUploads;
 
-            //AutoResetEvent is used to prevent the UploadStats
-            //from updating in the time between one upload
-            //finished and the next upload has not yet started
-            //as this can lead to unwanted behaviour in the UploadStats...
-            AutoResetEvent resetEvent = new AutoResetEvent(true);
-            UploadStats uploadStats = new UploadStats(resetEvent);
+            //The stats gate (SemaphoreSlim) prevents UploadStats updates from
+            //running concurrently with an upload's status transitions, as this
+            //can lead to unwanted behaviour in the UploadStats. It replaced the
+            //AutoResetEvent whose token could be consumed without being returned
+            //(BUG-09, see BUG-06)...
+            using (SemaphoreSlim statsGate = new SemaphoreSlim(1, 1))
+            {
+            UploadStats uploadStats = new UploadStats(statsGate);
             this.onUploadStarted(new UploadListStartedEventArgs(uploadStats));
 
             this.uploader = new Uploader(this.uploadList, this.maxUploadInBytesPerSecond);
@@ -770,7 +772,7 @@ namespace Drexel.VidUp.UI.ViewModels
             this.uploader.UploadStatsUpdated += (sender) => this.uploadStatsUpdated();
             this.uploader.UploadStarting += (sender, upload) => this.uploadStarting(upload);
             this.uploader.UploadFinished += (sender, upload) => this.uploadFinished(upload);
-            UploaderResult uploadResult = await uploader.UploadAsync(uploadStats, resume, resetEvent).ConfigureAwait(false);
+            UploaderResult uploadResult = await uploader.UploadAsync(uploadStats, resume, statsGate).ConfigureAwait(false);
             bool uploadStopped = uploader.UploadStopped;
             this.uploader = null;
 
@@ -787,6 +789,7 @@ namespace Drexel.VidUp.UI.ViewModels
             lock (this.finishedUploadsLock)
             {
                 this.finishedUploads.Clear();
+            }
             }
             }
             catch (Exception e)

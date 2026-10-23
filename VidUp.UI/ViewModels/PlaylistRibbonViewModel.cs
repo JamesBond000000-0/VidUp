@@ -779,7 +779,7 @@ namespace Drexel.VidUp.UI.ViewModels
                     if (videosPublicMap[upload.VideoId])
                     {
                         upload.Playlist = playlistVideosWithoutPlaylist.Key;
-                        AddToPlaylistResult addToPlaylistResult = await YoutubePlaylistItemService.AddToPlaylistAsync(upload).ConfigureAwait(false);
+                        AddToPlaylistResult addToPlaylistResult = await YoutubePlaylistItemService.AddToPlaylistAsync(upload, CancellationToken.None).ConfigureAwait(false);
                         if (addToPlaylistResult.StatusInformation != null)
                         {
                             if (addToPlaylistResult.StatusInformation.IsQuotaError)

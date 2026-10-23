@@ -30,7 +30,11 @@ namespace Drexel.VidUp.Youtube
 
         //reset on every update to avoid reevaluations for some of the stats
         private long currentRemainingBytesLeftToSend;
-        private AutoResetEvent resetEvent;
+        //gate shared with the upload service: Update and the upload's status
+        //transitions mutually exclude each other (SemaphoreSlim since BUG-09,
+        //before that an AutoResetEvent whose token could be consumed without
+        //being returned, see BUG-06)
+        private SemaphoreSlim statsGate;
 
         public float TotalProgressPercentage
         { 
@@ -128,14 +132,14 @@ namespace Drexel.VidUp.Youtube
             set => this.resumeUploads = value;
         }
 
-        public UploadStats(AutoResetEvent resetEvent)
+        public UploadStats(SemaphoreSlim statsGate)
         {
-            this.resetEvent = resetEvent;
+            this.statsGate = statsGate;
         }
 
         public void Update()
         {
-            this.resetEvent.WaitOne();
+            this.statsGate.Wait();
 
             try
             {
@@ -155,9 +159,9 @@ namespace Drexel.VidUp.Youtube
             }
             finally
             {
-                //without the finally an exception here deadlocks every WaitOne in the
-                //upload service, because the event is never set again (BUG-06)
-                this.resetEvent.Set();
+                //without the finally an exception here deadlocks every gate wait in
+                //the upload service, because the gate is never released again (BUG-06)
+                this.statsGate.Release();
             }
         }
 

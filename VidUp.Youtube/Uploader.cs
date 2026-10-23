@@ -143,11 +143,19 @@ namespace Drexel.VidUp.Youtube
             }
         }
 
-        public async Task<UploaderResult> UploadAsync(UploadStats uploadStats, bool resumeUploads, AutoResetEvent resetEvent)
+        public async Task<UploaderResult> UploadAsync(UploadStats uploadStats, bool resumeUploads, SemaphoreSlim statsGate)
         {
             Tracer.Write($"Uploader.Upload: Start with resumeUploads: {resumeUploads}.");
             this.uploadStats = uploadStats;
             this.resumeUploads = resumeUploads;
+
+            //a cancelled token source stays cancelled, so a reused Uploader would
+            //instantly "stop" every later session; create a fresh one per session
+            //and reset the stopped flag (BUG-09, latent while the UI created a
+            //new Uploader for every session)
+            this.tokenSource?.Dispose();
+            this.tokenSource = new CancellationTokenSource();
+            this.uploadStopped = false;
 
             List<Predicate<Upload>> predicates = new List<Predicate<Upload>>(2);
             predicates.Add(upload2 => upload2.UploadStatus == UplStatus.ReadyForUpload && File.Exists(upload2.FilePath));
@@ -177,7 +185,6 @@ namespace Drexel.VidUp.Youtube
 
                     upload.UploadStatus = UplStatus.Uploading;
                     this.uploadStats.NewUpload(upload);
-                    resetEvent.Set();
 
                     this.onUploadStarting(upload);
 
@@ -185,7 +192,7 @@ namespace Drexel.VidUp.Youtube
 
                     if (upload.YoutubeAccount.IsAuthenticated)
                     {
-                        UploadResult videoResult = await YoutubeVideoUploadService.UploadAsync(upload, this.resumableSessionUriSet, this.tokenSource.Token, resetEvent).ConfigureAwait(false);
+                        UploadResult videoResult = await YoutubeVideoUploadService.UploadAsync(upload, this.resumableSessionUriSet, this.tokenSource.Token, statsGate).ConfigureAwait(false);
                         JsonSerializationContent.JsonSerializer.SerializeAllUploads();
 
                         this.onUploadFinished(upload);
@@ -193,8 +200,8 @@ namespace Drexel.VidUp.Youtube
                         if (videoResult == UploadResult.Finished)
                         {
                             dataSent = true;
-                            await YoutubeThumbnailService.AddThumbnailAsync(upload).ConfigureAwait(false);
-                            await YoutubePlaylistItemService.AddToPlaylistAsync(upload).ConfigureAwait(false);
+                            await YoutubeThumbnailService.AddThumbnailAsync(upload, this.tokenSource.Token).ConfigureAwait(false);
+                            await YoutubePlaylistItemService.AddToPlaylistAsync(upload, this.tokenSource.Token).ConfigureAwait(false);
                         }
 
                         if (videoResult == UploadResult.FailedWithDataSent || videoResult == UploadResult.StoppedWithDataSent)
@@ -314,7 +321,15 @@ namespace Drexel.VidUp.Youtube
 
         public void StopUpload()
         {
-            this.tokenSource.Cancel();
+            try
+            {
+                this.tokenSource?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                //the token source is recreated at the start of a session, a stop
+                //racing with that moment must not crash the caller (BUG-09)
+            }
         }
     }
 }
