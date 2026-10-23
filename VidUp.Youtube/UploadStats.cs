@@ -137,21 +137,28 @@ namespace Drexel.VidUp.Youtube
         {
             this.resetEvent.WaitOne();
 
-            this.currentRemainingBytesLeftToSend = this.resumeUploads ? this.uploadList.GetRemainingBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetRemainingBytesOfFilesToUpload(this.uploaded);
-
-            //check if upload has been added, removed, paused, reset...
-            long currentTotalBytesInSession = (this.resumeUploads ? this.uploadList.GetTotalBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetTotalBytesOfFilesToUpload(this.uploaded)) + this.totalFileLengthProcessed;
-            long delta = currentTotalBytesInSession - this.totalFileLengthToSend;
-            if (delta != 0)
+            try
             {
-                this.totalFileLengthToSend = this.resumeUploads ? this.uploadList.GetTotalBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetTotalBytesOfFilesToUpload(this.uploaded);
-                this.totalRemainingBytes = this.resumeUploads ? this.uploadList.GetRemainingBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetRemainingBytesOfFilesToUpload(this.uploaded);
-                this.currentUploadBytesSentInitial = this.currentUpload.BytesSent;
-                this.totalFileLengthProcessed = 0;
-                this.totalBytesSent = 0;
-            }
+                this.currentRemainingBytesLeftToSend = this.resumeUploads ? this.uploadList.GetRemainingBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetRemainingBytesOfFilesToUpload(this.uploaded);
 
-            this.resetEvent.Set();
+                //check if upload has been added, removed, paused, reset...
+                long currentTotalBytesInSession = (this.resumeUploads ? this.uploadList.GetTotalBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetTotalBytesOfFilesToUpload(this.uploaded)) + this.totalFileLengthProcessed;
+                long delta = currentTotalBytesInSession - this.totalFileLengthToSend;
+                if (delta != 0)
+                {
+                    this.totalFileLengthToSend = this.resumeUploads ? this.uploadList.GetTotalBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetTotalBytesOfFilesToUpload(this.uploaded);
+                    this.totalRemainingBytes = this.resumeUploads ? this.uploadList.GetRemainingBytesOfFilesToUploadIncludingResumable(this.uploaded) : this.uploadList.GetRemainingBytesOfFilesToUpload(this.uploaded);
+                    this.currentUploadBytesSentInitial = this.currentUpload != null ? this.currentUpload.BytesSent : 0;
+                    this.totalFileLengthProcessed = 0;
+                    this.totalBytesSent = 0;
+                }
+            }
+            finally
+            {
+                //without the finally an exception here deadlocks every WaitOne in the
+                //upload service, because the event is never set again (BUG-06)
+                this.resetEvent.Set();
+            }
         }
 
         public void Initialize(UploadList uploadList, in bool resumeUploads)

@@ -261,30 +261,44 @@ namespace Drexel.VidUp.Youtube
 
         private void timerElapsed(object info)
         {
+            //the timer starts before the first upload is assigned and can still fire
+            //after the upload session ended, so work on snapshots and tolerate null (BUG-06)
+            Upload upload = this.currentUpload;
+            if (upload == null || this.uploadStats == null)
+            {
+                return;
+            }
+
             //updates BytesSent, which are used for upload stats update
             //sequence is important for consistent GUI updates
-            this.onUploadBytesSent(this.currentUpload);
+            this.onUploadBytesSent(upload);
             this.updateUploadProgress();
             this.onUploadStatsUpdated();
             Debug.WriteLine("Hello, world.");
-            this.serializeOnUpload();
+            this.serializeOnUpload(upload);
         }
 
         private void updateUploadProgress()
         {
-            this.uploadStats.Update();
+            UploadStats uploadStats = this.uploadStats;
+            if (uploadStats == null)
+            {
+                return;
+            }
+
+            uploadStats.Update();
             //this.uploadStats.CurrentTotalBytesLeftRemaining = ;
-            this.uploadStats.CurrentSpeedInBytesPerSecond = YoutubeVideoUploadService.CurrentSpeedInBytesPerSecond;
+            uploadStats.CurrentSpeedInBytesPerSecond = YoutubeVideoUploadService.CurrentSpeedInBytesPerSecond;
         }
 
-        private void serializeOnUpload()
+        private void serializeOnUpload(Upload upload)
         {
             if ((DateTime.Now - this.lastSerialization).TotalSeconds >= Uploader.serializationInterval)
             {
                 UploadProgress progress = new UploadProgress
                 {
-                    UploadGuid = this.currentUpload.Guid,
-                    BytesSent = this.currentUpload.BytesSent
+                    UploadGuid = upload.Guid,
+                    BytesSent = upload.BytesSent
                 };
 
                 JsonSerializationContent.JsonSerializer.SerializeUploadProgress(progress);
