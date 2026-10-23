@@ -62,6 +62,7 @@ namespace Drexel.VidUp.UI.ViewModels
         private object uploadingLock = new object();
 
         private List<Upload> finishedUploads = new List<Upload>();
+        private object finishedUploadsLock = new object();
 
         private DateTime lastExecution = DateTime.MinValue;
         AutoResetEvent autoReset = new AutoResetEvent(true);
@@ -568,7 +569,13 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private void uploadFinished(Upload upload)
         {
-            this.finishedUploads.Add(upload);
+            //finishedUploads is accessed from multiple threads (upload events,
+            //automation executions), all accesses take this lock (BUG-19)
+            lock (this.finishedUploadsLock)
+            {
+                this.finishedUploads.Add(upload);
+            }
+
             EventAggregator.Instance.Publish(new UploadFinishedMessage(upload));
 
             bool executed = false;
@@ -585,7 +592,10 @@ namespace Drexel.VidUp.UI.ViewModels
                 if (upload.Template.Uploads.All(upl => upl.UploadStatus != UplStatus.ReadyForUpload))
                 {
                     List<Upload> templateUploads = new List<Upload>();
-                    templateUploads.AddRange(this.finishedUploads.Where(upl => upl.Template == upload.Template));
+                    lock (this.finishedUploadsLock)
+                    {
+                        templateUploads.AddRange(this.finishedUploads.Where(upl => upl.Template == upload.Template));
+                    }
 
                     UploadResultAutomationInfo uploadResultAutomationInfo = new UploadResultAutomationInfo();
                     uploadResultAutomationInfo.TemplateName = upload.Template.Name;
@@ -602,27 +612,63 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void serializeandExecute(string executeFile, string midText, UploadResultAutomationInfo uploadResultAutomationInfo)
         {
-            await Task.Run(async () =>
+            try
+            {
+                //common pre-check for all callers: one abort path passed the execution
+                //path without validating it (BUG-19)
+                if (string.IsNullOrWhiteSpace(executeFile))
                 {
-                    this.autoReset.WaitOne();
-                    double delay = (DateTime.Now - this.lastExecution).TotalMilliseconds;
-                    if (delay < Settings.Instance.UserSettings.AutomationExecutionDelayInSeconds * 1000)
-                    {
-                        delay = Settings.Instance.UserSettings.AutomationExecutionDelayInSeconds * 1000 - delay;
-                        await Task.Delay((int)delay).ConfigureAwait(false);
-                    }
+                    Tracer.Write($"UploadRibbonViewModel.serializeandExecute: No execution file given, skipping execution ({midText}).");
+                    return;
                 }
-            );            
 
-            string fileName = $"automationinfo_uploadfinished_{midText}_{DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff")}.json";
-            JsonSerializationUploadResultAutomationInfo.JsonSerializer.SerializeUploadResultAutomationInfo(fileName, uploadResultAutomationInfo);
-            Process proc = new Process();
-            proc.StartInfo.FileName = new FileInfo(executeFile).FullName;
-            proc.StartInfo.WorkingDirectory = new DirectoryInfo(executeFile).Parent.FullName;
-            proc.StartInfo.Arguments = Path.Combine(JsonSerializationUploadResultAutomationInfo.JsonSerializer.SerializationFolder, fileName);
-            this.lastExecution = DateTime.Now;
-            proc.Start();
-            this.autoReset.Set();
+                await Task.Run(async () =>
+                    {
+                        this.autoReset.WaitOne();
+                        try
+                        {
+                            double delay = (DateTime.Now - this.lastExecution).TotalMilliseconds;
+                            if (delay < Settings.Instance.UserSettings.AutomationExecutionDelayInSeconds * 1000)
+                            {
+                                delay = Settings.Instance.UserSettings.AutomationExecutionDelayInSeconds * 1000 - delay;
+                                await Task.Delay((int)delay).ConfigureAwait(false);
+                            }
+                        }
+                        catch
+                        {
+                            //the event was already taken: give it back, otherwise all
+                            //later executions wait forever (BUG-19)
+                            this.autoReset.Set();
+                            throw;
+                        }
+                    }
+                );
+
+                try
+                {
+                    //the Guid suffix prevents file name collisions within the same millisecond
+                    string fileName = $"automationinfo_uploadfinished_{midText}_{DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff")}_{Guid.NewGuid().ToString("N").Substring(0, 8)}.json";
+                    JsonSerializationUploadResultAutomationInfo.JsonSerializer.SerializeUploadResultAutomationInfo(fileName, uploadResultAutomationInfo);
+                    Process proc = new Process();
+                    proc.StartInfo.FileName = new FileInfo(executeFile).FullName;
+                    DirectoryInfo parentFolder = new DirectoryInfo(executeFile).Parent;
+                    proc.StartInfo.WorkingDirectory = parentFolder != null ? parentFolder.FullName : JsonSerializationUploadResultAutomationInfo.JsonSerializer.SerializationFolder;
+                    proc.StartInfo.Arguments = Path.Combine(JsonSerializationUploadResultAutomationInfo.JsonSerializer.SerializationFolder, fileName);
+                    this.lastExecution = DateTime.Now;
+                    proc.Start();
+                }
+                finally
+                {
+                    //without this finally, any exception above (missing or not
+                    //executable file, serialization error, ...) left the event
+                    //unset and blocked all later automation executions (BUG-19)
+                    this.autoReset.Set();
+                }
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"UploadRibbonViewModel.serializeandExecute: Unexpected Exception: {e.ToString()}");
+            }
         }
 
         private void uploadStatsUpdated()
@@ -702,7 +748,10 @@ namespace Drexel.VidUp.UI.ViewModels
             //prevent sleep mode
             PowerSavingHelper.DisablePowerSaving();
 
-            this.finishedUploads.Clear();
+            lock (this.finishedUploadsLock)
+            {
+                this.finishedUploads.Clear();
+            }
 
             this.uploadStatus = UploadStatus.Uploading;
             bool resume = this.resumeUploads;
@@ -735,7 +784,10 @@ namespace Drexel.VidUp.UI.ViewModels
                 this.executelFinalAutomationExecutions();
             }
 
-            this.finishedUploads.Clear();
+            lock (this.finishedUploadsLock)
+            {
+                this.finishedUploads.Clear();
+            }
             }
             catch (Exception e)
             {
@@ -763,8 +815,15 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private void executelFinalAutomationExecutions()
         {
+            //work on a snapshot, finishedUploads is accessed from multiple threads (BUG-19)
+            List<Upload> finishedUploads;
+            lock (this.finishedUploadsLock)
+            {
+                finishedUploads = new List<Upload>(this.finishedUploads);
+            }
+
             //all templates with uploads
-            List<Template> templatesWithUploads = this.finishedUploads.Select(upl => upl.Template).Distinct().ToList();
+            List<Template> templatesWithUploads = finishedUploads.Select(upl => upl.Template).Distinct().ToList();
             templatesWithUploads.RemoveAll(template => template == null);
 
             //check if aborted and if last template execution needs be done for automation
@@ -775,7 +834,7 @@ namespace Drexel.VidUp.UI.ViewModels
                     if (templateWithUpload.Uploads.Any(upl => upl.UploadStatus == UplStatus.ReadyForUpload))
                     {
                         List<Upload> templateUploads = new List<Upload>();
-                        templateUploads.AddRange(this.finishedUploads.Where(upl => upl.Template == templateWithUpload));
+                        templateUploads.AddRange(finishedUploads.Where(upl => upl.Template == templateWithUpload));
 
                         UploadResultAutomationInfo uploadResultAutomationInfoTemplate = new UploadResultAutomationInfo();
                         uploadResultAutomationInfoTemplate.TemplateName = templateWithUpload.Name;
@@ -785,7 +844,12 @@ namespace Drexel.VidUp.UI.ViewModels
                             uploadResultAutomationInfoTemplate.UploadedFiles.Add(new FileInfo(templateUpload.FilePath).FullName, templateUpload.UploadStatus.ToString());
                         }
 
-                        this.serializeandExecute(templateWithUpload.AutomationSettings.ExecuteAfterTemplatePath, "template", uploadResultAutomationInfoTemplate);
+                        //this abort path passed the execution path without the checks
+                        //the other callers do (BUG-19)
+                        if (templateWithUpload.EnableAutomation && !string.IsNullOrWhiteSpace(templateWithUpload.AutomationSettings.ExecuteAfterTemplatePath))
+                        {
+                            this.serializeandExecute(templateWithUpload.AutomationSettings.ExecuteAfterTemplatePath, "template", uploadResultAutomationInfoTemplate);
+                        }
                     }
                 }
             }
@@ -805,7 +869,7 @@ namespace Drexel.VidUp.UI.ViewModels
             }
 
             UploadResultAutomationInfo uploadResultAutomationInfo = new UploadResultAutomationInfo();
-            foreach (Upload uploadFinished in this.finishedUploads)
+            foreach (Upload uploadFinished in finishedUploads)
             {
                 uploadResultAutomationInfo.UploadedFiles.Add(new FileInfo(uploadFinished.FilePath).FullName, uploadFinished.UploadStatus.ToString());
             }
