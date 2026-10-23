@@ -253,7 +253,7 @@
 | Phase 3 | P0 のアップロードまわり：BUG-03（ストリームのハング）、BUG-05（再開照会）、BUG-06（Timer/resetEvent）、BUG-15（static 解消） | Youtube | モック応答テスト、ハングしないことのタイムアウト付きテスト | **完了（2026-10-23）**: BUG 単位で4コミット。応答分類を ResumePositionEvaluator に分離して単体テスト化、新規テスト14件、全61件が Wine 上で合格。詳細は BASELINE §8 |
 | Phase 4 | スケジュール：BUG-07、BUG-11、BUG-12、BUG-22（特性テストを先行） | Business | ✅ 完了（2026-10-23、§9 参照。新規テスト22件、全83件合格） |
 | Phase 5 | ライフサイクルとスレッド：BUG-02（省電力）、BUG-08（Watcher 終了処理）、BUG-18（Timer 破棄）、BUG-19（自動化の finally）、BUG-14（EventAggregator） | UI、Youtube | **完了（2026-10-24、BASELINE §10）**: 全テスト 89/89（Wine） |
-| Phase 6 | 認証とキャンセル：BUG-10（refresh_token／リスナー）、BUG-09（トークン伝播＋resetEvent の本格置換：排他を SemaphoreSlim 化）、BUG-16（トークン辞書）、BUG-17（null 応答） | Youtube | パース単体テスト、手動ログイン確認 |
+| Phase 6 | 認証とキャンセル：BUG-10（refresh_token／リスナー）、BUG-09（トークン伝播＋resetEvent の本格置換：排他を SemaphoreSlim 化）、BUG-16（トークン辞書）、BUG-17（null 応答） | Youtube | **完了（2026-10-24、BASELINE §11）**: 全テスト 102/102（Wine）。手動ログイン確認のみ未実施（実アカウントが必要） |
 | Phase 7 | 残り：BUG-20（async void の段階是正）、BUG-24〜32（P3 一括）、BUG-25 の正規化、BUG-28 の進捗計算 | 全体 | 個別確認 |
 
 順序の理由: Phase 2・3 は「通常使用で実害が出る」順。Phase 4 はテスト整備が前提になる分だけ後ろ。Phase 5・6 は触る範囲が UI／認証に広く、影響確認に手動手順が要るため分けた。

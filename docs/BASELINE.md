@@ -151,3 +151,16 @@ Linux VM 上に Wine 9.0（Ubuntu 24.04 パッケージ）+ Xvfb の環境を構
 
 環境メモ（検証時の障害）:
 - 2026-10-23 夜〜24 日未明に VM のランタイム再起動が3回発生し、そのたびに Wine が消去（OS-intent リプレイで約10分後に自動復旧）したほか、再起動後は `::ffff:127.0.0.1` 宛の経路が loopback でなくプロキシ fabric (host0) 経由になり、vstest↔testhost の通信が化けて discovery から進まなくなった。`sysctl -w net.ipv6.conf.all.disable_ipv6=1`（セル全体・再起動でリセット）で IPv4 フォールバックさせることで復旧し、最終的に 89/89 を確認した。詳細な運用手順は作業環境側の TOOLS.md に記録。
+
+## 11. Phase 6 実施結果（2026-10-24、認証とキャンセル: BUG-10/09/16/17）
+
+変更（BUG 単位で4コミット）:
+- BUG-10: 認可URLに access_type=offline と prompt=consent を追加し、再サインインでも refresh_token が返るようにした。トークン応答のパースを TokenResponseParser に分離し、応答に refresh_token が無い場合は既存値を保持（従来は KeyNotFoundException が汎用認証エラーに化けて再ログイン不能に見えた）、access_token/expires_in の欠落も明確な例外にした。HttpListener は using 化（例外経路でポートを掴んだまま残った）し、GetContextAsync に10分のタイムアウトを付けた。トークン要求ボディは FormUrlEncodedContent で構築（従来は値が未エンコード）。サインアウト時は HttpHelper のアクセストークンキャッシュも消す（RemoveAccessToken 新設）。反転していた Tracer 文言（custom/default）も是正。
+- BUG-16: HttpHelper のアクセストークンキャッシュを ConcurrentDictionary 化し、確認+取得+格納を SemaphoreSlim で直列化。呼び出し側は ensure の戻り値を使う形に変更し、await 後に辞書をインデクサで引き直す競合を排除。Clear/Remove も並行安全化。
+- BUG-17: 応答 DTO 3種（プレイリスト／プレイリスト項目／動画）の Items を空配列で初期化し、サービス側の参照（Items と NextPageToken）を null 条件付きにした二重防御。アップロード応答が null／video id なしの場合は「状態不明」として再開照会で解決し、完了済みならそのまま完了扱い（従来は NRE がリトライ可能な送信失敗に化け、完了済みセッションへ再 PUT して重複を招き得た）。
+- BUG-09: キャンセルトークンを全フェーズへ伝播（初期化 POST、再開照会 PUT、サムネイル POST、プレイリスト追加 POST、リトライ間隔の Task.Delay）。Uploader はセッション開始時に tokenSource を作り直し（旧ものは Dispose、uploadStopped もリセット）、Cancel 後の再利用で以後のアップロードが即停止扱いになる潜在バグを解消。あわせて BUG-06 で決定した resetEvent の本格置換を実施: 統計更新の排他を SemaphoreSlim(1,1) の stats gate に移し、アップロード側の WaitOne 13箇所を「ゲート取得→状態遷移→必ず解放」の setUploadStatusAsync に集約。ゲートを握るのはメモリ上の統計計算だけなので待ちは有界とし、トークンはネットワーク待ちに専念させた。手動プレイリスト追加からは CancellationToken.None を渡す。
+
+検証:
+- 新規テスト13件（TokenResponseParser 7件、HttpHelper 並行 2件、API 応答 DTO 4件）。UploadStats のゲート契約テスト（BUG-06 由来）は SemaphoreSlim 用に更新。Wine 上の全テスト実行で **102/102 合格**（従来89 + 新規13）。
+- 全7プロジェクト 0 エラー。警告数はベースラインと完全一致（UI 171 / Test 176 / Youtube 7 含む）。
+- 未実施（実アカウントが必要なため）: 実ログインでの確認、停止操作のフェーズ別手動確認、Uploader 再利用の単体テスト（再利用は「セッションごとに新しい tokenSource」という構成で担保し、UI は現行でも Uploader を毎回生成している）。
