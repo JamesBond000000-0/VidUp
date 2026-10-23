@@ -251,7 +251,7 @@
 | Phase 1 | .NET 10 移行（TFM・パッケージ・インストーラの .NET 判定と案内文、Setup 内の net6.0 残骸パス修正）。バグ修正は混ぜない | 全 csproj、VidUp.Setup | ビルド＋48テスト通過、インストーラ判定の確認 | **実施済み（2026-10-23）**: 全プロジェクト 0 エラー、警告数は移行前と一致。テスト実行と画面・インストーラの実機確認は Windows 環境待ち（BASELINE.md §5 に記録） |
 | Phase 2 | P0 の保存まわり：BUG-01（finally＋atomic化＋.bak）、BUG-13（ロック整備）、BUG-04（補正の安全化）、BUG-21/23（読込の堅牢化） | Json、Business | 並行保存ストレス＋壊れた JSON 読込テスト通過 | **実施済み（2026-10-23）**: BrokenJson 資産6件すべて読込成功、並行保存ストレス（300回・4ファイル混在）でエラー0＆全ファイル解析可能、書込失敗注入でもカウンタ回復と元ファイル無傷を確認。詳細は BASELINE.md §6 と BrokenJson_README の実測表。Windows 実機での既存48テスト実行は未確認のまま |
 | Phase 3 | P0 のアップロードまわり：BUG-03（ストリームのハング）、BUG-05（再開照会）、BUG-06（Timer/resetEvent）、BUG-15（static 解消） | Youtube | モック応答テスト、ハングしないことのタイムアウト付きテスト | **完了（2026-10-23）**: BUG 単位で4コミット。応答分類を ResumePositionEvaluator に分離して単体テスト化、新規テスト14件、全61件が Wine 上で合格。詳細は BASELINE §8 |
-| Phase 4 | スケジュール：BUG-07、BUG-11、BUG-12、BUG-22（特性テストを先行） | Business | 表形式テスト通過、複製テスト通過 |
+| Phase 4 | スケジュール：BUG-07、BUG-11、BUG-12、BUG-22（特性テストを先行） | Business | ✅ 完了（2026-10-23、§9 参照。新規テスト22件、全83件合格） |
 | Phase 5 | ライフサイクルとスレッド：BUG-02（省電力）、BUG-08（Watcher 終了処理）、BUG-18（Timer 破棄）、BUG-19（自動化の finally）、BUG-14（EventAggregator） | UI、Youtube | 終了処理の確認、並行テスト通過 |
 | Phase 6 | 認証とキャンセル：BUG-10（refresh_token／リスナー）、BUG-09（トークン伝播＋resetEvent の本格置換：排他を SemaphoreSlim 化）、BUG-16（トークン辞書）、BUG-17（null 応答） | Youtube | パース単体テスト、手動ログイン確認 |
 | Phase 7 | 残り：BUG-20（async void の段階是正）、BUG-24〜32（P3 一括）、BUG-25 の正規化、BUG-28 の進捗計算 | 全体 | 個別確認 |
