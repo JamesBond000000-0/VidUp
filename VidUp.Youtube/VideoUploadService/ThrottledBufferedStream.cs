@@ -29,6 +29,11 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
         private Stream baseStream;
         private long position;
 
+        //set by the fill task when reading the base stream failed, so the consuming
+        //side can fail the upload instead of waiting forever (BUG-03)
+        private volatile Exception fillException;
+        private bool disposed;
+
         private long maximumBytesPerSecondRead;
         private Dictionary<long, int> bytesPerTimeSlot = new Dictionary<long, int>();
 
@@ -151,6 +156,16 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
         }
 
         public ThrottledBufferedStream(string filePath, long position, long maximumBytesPerSecond)
+            : this(filePath == null ? null : new FileStream(filePath, FileMode.Open, FileAccess.Read), position, maximumBytesPerSecond, filePath == null)
+        {
+        }
+
+        public ThrottledBufferedStream(Stream baseStream, long position, long maximumBytesPerSecond)
+            : this(baseStream, position, maximumBytesPerSecond, false)
+        {
+        }
+
+        private ThrottledBufferedStream(Stream baseStream, long position, long maximumBytesPerSecond, bool filePathWasNull)
         {
             if (ThrottledBufferedStream.historyForUploadInSeconds > ThrottledBufferedStream.keepHistoryForInSeconds)
             {
@@ -162,9 +177,9 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 throw new InvalidOperationException("History not long enough for stats.");
             }
 
-            if (filePath == null)
+            if (baseStream == null)
             {
-                throw new ArgumentNullException("filePath");
+                throw new ArgumentNullException(filePathWasNull ? "filePath" : "baseStream");
             }
 
             if (maximumBytesPerSecond < 0)
@@ -172,8 +187,12 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 throw new ArgumentOutOfRangeException("maximumBytesPerSecond", maximumBytesPerSecond, "The maximum number of bytes per second can't be negative.");
             }
 
-            this.baseStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-            this.baseStream.Position = position;
+            this.baseStream = baseStream;
+            if (this.baseStream.CanSeek)
+            {
+                this.baseStream.Position = position;
+            }
+
             this.position = position;
             this.maximumBytesPerSecondRead = maximumBytesPerSecond;
 
@@ -254,37 +273,62 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
 
         private void fillMemoryBuffer()
         {
-            while (true)
+            try
             {
-                byte[] buffer = new byte[this.readCapacity];
-                int bytesRead = this.baseStream.Read(buffer, 0, this.readCapacity);
-                if (bytesRead == 0)
+                while (true)
                 {
-                    this.memoryBuffer.CompleteAdding();
-                    return;
-                }
-
-                if (bytesRead < this.readCapacity)
-                {
-                    byte[] temp = new byte[bytesRead];
-                    Array.Copy(buffer, 0, temp, 0, bytesRead);
-                    buffer = temp;
-                }
-
-
-                int bufferPosition = 0;
-                while (bufferPosition < buffer.Length)
-                {
-                    int bytesToRead = this.memoryBufferSize;
-                    if (bufferPosition + this.memoryBufferSize > buffer.Length)
+                    byte[] buffer = new byte[this.readCapacity];
+                    int bytesRead = this.baseStream.Read(buffer, 0, this.readCapacity);
+                    if (bytesRead == 0)
                     {
-                        bytesToRead = buffer.Length - bufferPosition;
+                        return;
                     }
 
-                    byte[] temp = new byte[bytesToRead];
-                    Array.Copy(buffer, bufferPosition, temp, 0, bytesToRead);
-                    bufferPosition += bytesToRead;
-                    this.memoryBuffer.Add(temp);
+                    if (bytesRead < this.readCapacity)
+                    {
+                        byte[] temp = new byte[bytesRead];
+                        Array.Copy(buffer, 0, temp, 0, bytesRead);
+                        buffer = temp;
+                    }
+
+
+                    int bufferPosition = 0;
+                    while (bufferPosition < buffer.Length)
+                    {
+                        int bytesToRead = this.memoryBufferSize;
+                        if (bufferPosition + this.memoryBufferSize > buffer.Length)
+                        {
+                            bytesToRead = buffer.Length - bufferPosition;
+                        }
+
+                        byte[] temp = new byte[bytesToRead];
+                        Array.Copy(buffer, bufferPosition, temp, 0, bytesToRead);
+                        bufferPosition += bytesToRead;
+                        this.memoryBuffer.Add(temp);
+                    }
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                //the stream was disposed while filling, nothing to report to the consumer
+            }
+            catch (InvalidOperationException) when (this.memoryBuffer.IsAddingCompleted)
+            {
+                //Dispose completed the buffer while Add was blocked, nothing to report to the consumer
+            }
+            catch (Exception e)
+            {
+                //remember the failure so the consuming side throws it instead of waiting forever (BUG-03)
+                this.fillException = e;
+            }
+            finally
+            {
+                try
+                {
+                    this.memoryBuffer.CompleteAdding();
+                }
+                catch (ObjectDisposedException)
+                {
                 }
             }
         }
@@ -301,6 +345,14 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 }
                 catch (InvalidOperationException)
                 {
+                    //the buffer is completed and empty: either the base stream is fully read
+                    //or filling failed, in which case the failure is surfaced instead of
+                    //silently pretending the stream ended (BUG-03)
+                    if (this.fillException != null)
+                    {
+                        throw new IOException("Reading the underlying stream failed, see inner exception.", this.fillException);
+                    }
+
                     return 0;
                 }
             }
@@ -349,6 +401,22 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
 
         protected override void Dispose(bool disposing)
         {
+            if (disposing && !this.disposed)
+            {
+                this.disposed = true;
+
+                //unblock a consumer waiting in Take and a fill task waiting in Add (BUG-03)
+                try
+                {
+                    this.memoryBuffer.CompleteAdding();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+
+                this.memoryBuffer.Dispose();
+            }
+
             this.baseStream.Dispose();
             base.Dispose(disposing);
         }
