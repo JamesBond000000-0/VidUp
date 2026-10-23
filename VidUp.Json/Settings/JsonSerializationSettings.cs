@@ -1,5 +1,6 @@
-﻿using System.IO;
+using System.IO;
 using System.Threading;
+using Drexel.VidUp.Json.Content;
 using Drexel.VidUp.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -42,27 +43,30 @@ namespace Drexel.VidUp.Json.Settings
                 this.openWritesCount++;
             }
 
-            JsonSerializer serializer = new JsonSerializer();
-            serializer.Converters.Add(new StringEnumConverter());
-            serializer.Formatting = Formatting.Indented;
-
-            lock (this.settingsLock)
+            try
             {
-                using (StreamWriter sw = new StreamWriter(this.settingsFilePath))
-                using (JsonWriter writer = new JsonTextWriter(sw))
+                JsonSerializer serializer = new JsonSerializer();
+                serializer.Converters.Add(new StringEnumConverter());
+                serializer.Formatting = Formatting.Indented;
+
+                lock (this.settingsLock)
                 {
-                    serializer.Serialize(writer, this.userSettings);
+                    AtomicFileWriter.WriteJsonAtomic(this.settingsFilePath, serializer, this.userSettings);
                 }
+
+                Tracer.Write($"JsonSerializationSettings.SerializeSettings: End.", TraceLevel.Detailed);
             }
-
-            Tracer.Write($"JsonSerializationSettings.SerializeSettings: End.", TraceLevel.Detailed);
-
-            lock (this.serializationEnabledLock)
+            finally
             {
-                this.openWritesCount--;
-                if (this.openWritesCountDown != null)
+                //the counter must be decremented even when serialization fails,
+                //otherwise shutdown waits forever (BUG-01).
+                lock (this.serializationEnabledLock)
                 {
-                    this.openWritesCountDown.Signal();
+                    this.openWritesCount--;
+                    if (this.openWritesCountDown != null && this.openWritesCountDown.CurrentCount > 0)
+                    {
+                        this.openWritesCountDown.Signal();
+                    }
                 }
             }
         }
@@ -72,7 +76,10 @@ namespace Drexel.VidUp.Json.Settings
             lock (this.serializationEnabledLock)
             {
                 this.serializationEnabled = false;
-                this.openWritesCountDown = new CountdownEvent(this.openWritesCount);
+                if (this.openWritesCountDown == null)
+                {
+                    this.openWritesCountDown = new CountdownEvent(this.openWritesCount);
+                }
             }
 
             return this.openWritesCountDown;

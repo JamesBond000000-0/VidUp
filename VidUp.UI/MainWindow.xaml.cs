@@ -42,9 +42,16 @@ namespace Drexel.VidUp.UI
         private void closed(object sender, EventArgs e)
         {
             CountdownEvent serializationContentProcessesCount = ((MainWindowViewModel)this.DataContext).StopSerializationContent();
-            serializationContentProcessesCount.Wait();
+            if (!serializationContentProcessesCount.Wait(TimeSpan.FromSeconds(10)))
+            {
+                Tracer.Write($"MainWindow.closed: Timed out waiting for content serialization to finish, closing anyway.");
+            }
+
             CountdownEvent serializationSettingsProcessesCount = ((MainWindowViewModel)this.DataContext).StopSerializationSettings();
-            serializationSettingsProcessesCount.Wait();
+            if (!serializationSettingsProcessesCount.Wait(TimeSpan.FromSeconds(10)))
+            {
+                Tracer.Write($"MainWindow.closed: Timed out waiting for settings serialization to finish, closing anyway.");
+            }
             ((MainWindowViewModel) this.DataContext).Close();
         }
     }

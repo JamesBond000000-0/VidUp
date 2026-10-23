@@ -870,6 +870,14 @@ namespace Drexel.VidUp.UI.ViewModels
             JsonDeserializationContent deserializer = new JsonDeserializationContent(Settings.Instance.StorageFolder, Settings.Instance.ThumbnailFallbackImageFolder);
             deserializer.Deserialize(reSerialize);
 
+            if (deserializer.BackupRecoveredFiles.Count > 0)
+            {
+                //a data file was damaged and its backup copy was used instead (BUG-01).
+                //Tell the user, because the restored data may be slightly older than
+                //the last state they saw.
+                MessageBox.Show($"The following data files were damaged and were restored from their backup copies: {string.Join(", ", deserializer.BackupRecoveredFiles)}. The restored data may not include your most recent changes.", "Data restored from backup");
+            }
+
             this.youtubeAccountList = DeserializationRepositoryContent.YoutubeAccountList;
             this.templateList = DeserializationRepositoryContent.TemplateList;
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -28,6 +28,8 @@ namespace Drexel.VidUp.Json.Content
         private object uploadListLock = new object();
         private object templateListLock = new object();
         private object playlistListLock = new object();
+        private object youtubeAccountListLock = new object();
+        private object uploadProgressLock = new object();
 
         private bool serializationEnabled = true;
         private object serializationEnabledLock = new object();
@@ -51,68 +53,89 @@ namespace Drexel.VidUp.Json.Content
             this.youtubeAccountList = youtubeAccountList;
         }
 
+        //Registers an open write so StopSerialization can wait for it. The counter
+        //must always be decremented again via EndWrite, even on exceptions (BUG-01),
+        //therefore every Serialize method calls EndWrite in a finally block.
+        private bool BeginWrite()
+        {
+            lock(this.serializationEnabledLock)
+            {
+                if(!this.serializationEnabled)
+                {
+                    return false;
+                }
+
+                this.openWritesCount++;
+                return true;
+            }
+        }
+
+        private void EndWrite()
+        {
+            lock (this.serializationEnabledLock)
+            {
+                this.openWritesCount--;
+                if (this.openWritesCountDown != null && this.openWritesCountDown.CurrentCount > 0)
+                {
+                    this.openWritesCountDown.Signal();
+                }
+            }
+        }
+
         //on Upload [JsonObject(MemberSerialization = MemberSerialization.OptIn)]
         //is set so only opt-in properties/fields with [JsonProperty] are serialized
         public void SerializeAllUploads()
         {
             Tracer.Write($"JsonSerializationContent.SerializeAllUploads: Start.");
 
-            lock(this.serializationEnabledLock)
+            if(!this.BeginWrite())
             {
-                if(!this.serializationEnabled)
-                {
-                    Tracer.Write($"JsonSerializationContent.SerializeAllUploads: End, serialization disabled.");
-                    return;
-                }
-
-                this.openWritesCount++;
+                Tracer.Write($"JsonSerializationContent.SerializeAllUploads: End, serialization disabled.");
+                return;
             }
 
-            List<Upload> allUploads = new List<Upload>();
-            foreach (Upload upload in this.uploadList)
+            try
             {
-                allUploads.Add(upload);
-            }
+                JsonSerializer serializer = new JsonSerializer();
+                serializer.Converters.Add(new StringEnumConverter());
+                serializer.Converters.Add(new TemplateGuidStringConverter());
+                serializer.Converters.Add(new PlaylistPlaylistIdConverter());
+                serializer.Converters.Add(new CategoryIdConverter());
+                serializer.Converters.Add(new CultureInfoCultureStringConverter());
+                serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
 
-            foreach (Template template in this.templateList)
-            {
-                foreach (Upload upload in template.Uploads)
+                serializer.Formatting = Formatting.Indented;
+
+                lock(this.allUploadsLock)
                 {
-                    if (!allUploads.Contains(upload))
+                    //the snapshot is created inside the lock (BUG-13), so a concurrent
+                    //modification cannot corrupt the enumeration or let an outdated
+                    //snapshot overwrite newer content.
+                    List<Upload> allUploads = new List<Upload>();
+                    foreach (Upload upload in this.uploadList)
                     {
                         allUploads.Add(upload);
                     }
+
+                    foreach (Template template in this.templateList)
+                    {
+                        foreach (Upload upload in template.Uploads)
+                        {
+                            if (!allUploads.Contains(upload))
+                            {
+                                allUploads.Add(upload);
+                            }
+                        }
+                    }
+
+                    AtomicFileWriter.WriteJsonAtomic(this.allUploadsFilePath, serializer, allUploads);
                 }
+
+                Tracer.Write($"JsonSerializationContent.SerializeAllUploads: End.");
             }
-
-            JsonSerializer serializer = new JsonSerializer();
-            serializer.Converters.Add(new StringEnumConverter());
-            serializer.Converters.Add(new TemplateGuidStringConverter());
-            serializer.Converters.Add(new PlaylistPlaylistIdConverter());
-            serializer.Converters.Add(new CategoryIdConverter());
-            serializer.Converters.Add(new CultureInfoCultureStringConverter());
-            serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
-
-            serializer.Formatting = Formatting.Indented;
-
-            lock(this.allUploadsLock)
+            finally
             {
-                using (StreamWriter sw = new StreamWriter(this.allUploadsFilePath))
-                using (JsonWriter writer = new JsonTextWriter(sw))
-                {
-                    serializer.Serialize(writer, allUploads);
-                }
-            }
-
-            Tracer.Write($"JsonSerializationContent.SerializeAllUploads: End.");
-
-            lock (this.serializationEnabledLock)
-            {
-                this.openWritesCount--;
-                if (this.openWritesCountDown != null)
-                {
-                    this.openWritesCountDown.Signal();
-                }
+                this.EndWrite();
             }
         }
 
@@ -124,38 +147,27 @@ namespace Drexel.VidUp.Json.Content
         {
             Tracer.Write($"JsonSerializationContent.SerializeUploadList: Start.");
 
-            lock (this.serializationEnabledLock)
+            if (!this.BeginWrite())
             {
-                if (!this.serializationEnabled)
-                {
-                    Tracer.Write($"JsonSerializationContent.SerializeUploadList: End, serialization disabled.");
-                    return;
-                }
-
-                this.openWritesCount++;
+                Tracer.Write($"JsonSerializationContent.SerializeUploadList: End, serialization disabled.");
+                return;
             }
 
-            JsonSerializer serializer = new JsonSerializer();
-            serializer.Converters.Add(new UploadGuidStringConverter());
-            serializer.Formatting = Formatting.Indented;
-            lock (this.uploadListLock)
+            try
             {
-                using (StreamWriter sw = new StreamWriter(this.uploadListFilePath))
-                using (JsonWriter writer = new JsonTextWriter(sw))
+                JsonSerializer serializer = new JsonSerializer();
+                serializer.Converters.Add(new UploadGuidStringConverter());
+                serializer.Formatting = Formatting.Indented;
+                lock (this.uploadListLock)
                 {
-                    serializer.Serialize(writer, this.uploadList);
+                    AtomicFileWriter.WriteJsonAtomic(this.uploadListFilePath, serializer, this.uploadList);
                 }
+
+                Tracer.Write($"JsonSerializationContent.SerializeUploadList: End.");
             }
-
-            Tracer.Write($"JsonSerializationContent.SerializeUploadList: End.");
-
-            lock (this.serializationEnabledLock)
+            finally
             {
-                this.openWritesCount--;
-                if(this.openWritesCountDown != null)
-                {
-                    this.openWritesCountDown.Signal();
-                }
+                this.EndWrite();
             }
         }
 
@@ -165,45 +177,34 @@ namespace Drexel.VidUp.Json.Content
         {
             Tracer.Write($"JsonSerializationContent.SerializeTemplateList: Start.");
 
-            lock (this.serializationEnabledLock)
+            if (!this.BeginWrite())
             {
-                if (!this.serializationEnabled)
-                {
-                    Tracer.Write($"JsonSerializationContent.SerializeTemplateList: End, serialization disabled.");
-                    return;
-                }
-
-                this.openWritesCount++;
+                Tracer.Write($"JsonSerializationContent.SerializeTemplateList: End, serialization disabled.");
+                return;
             }
 
-            JsonSerializer serializer = new JsonSerializer();
-            serializer.Converters.Add(new StringEnumConverter());
-            serializer.Converters.Add(new UploadGuidStringConverter());
-            serializer.Converters.Add(new PlaylistPlaylistIdConverter());
-            serializer.Converters.Add(new CategoryIdConverter());
-            serializer.Converters.Add(new CultureInfoCultureStringConverter());
-            serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
-
-            serializer.Formatting = Formatting.Indented;
-
-            lock (this.templateListLock)
+            try
             {
-                using (StreamWriter sw = new StreamWriter(templateListFilePath))
-                using (JsonWriter writer = new JsonTextWriter(sw))
+                JsonSerializer serializer = new JsonSerializer();
+                serializer.Converters.Add(new StringEnumConverter());
+                serializer.Converters.Add(new UploadGuidStringConverter());
+                serializer.Converters.Add(new PlaylistPlaylistIdConverter());
+                serializer.Converters.Add(new CategoryIdConverter());
+                serializer.Converters.Add(new CultureInfoCultureStringConverter());
+                serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
+
+                serializer.Formatting = Formatting.Indented;
+
+                lock (this.templateListLock)
                 {
-                    serializer.Serialize(writer, this.templateList);
+                    AtomicFileWriter.WriteJsonAtomic(this.templateListFilePath, serializer, this.templateList);
                 }
+
+                Tracer.Write($"JsonSerializationContent.SerializeTemplateList: End.");
             }
-
-            Tracer.Write($"JsonSerializationContent.SerializeTemplateList: End.");
-
-            lock (this.serializationEnabledLock)
+            finally
             {
-                this.openWritesCount--;
-                if (this.openWritesCountDown != null)
-                {
-                    this.openWritesCountDown.Signal();
-                }
+                this.EndWrite();
             }
         }
 
@@ -211,40 +212,29 @@ namespace Drexel.VidUp.Json.Content
         {
             Tracer.Write($"JsonSerializationContent.SerializePlaylistList: Start.");
 
-            lock (this.serializationEnabledLock)
+            if (!this.BeginWrite())
             {
-                if (!this.serializationEnabled)
-                {
-                    Tracer.Write($"JsonSerializationContent.SerializePlaylistList: End, serialization disabled.");
-                    return;
-                }
-
-                this.openWritesCount++;
+                Tracer.Write($"JsonSerializationContent.SerializePlaylistList: End, serialization disabled.");
+                return;
             }
 
-            JsonSerializer serializer = new JsonSerializer();
-            serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
-
-            serializer.Formatting = Formatting.Indented;
-
-            lock (this.playlistListLock)
+            try
             {
-                using (StreamWriter sw = new StreamWriter(this.playlistListFilePath))
-                using (JsonWriter writer = new JsonTextWriter(sw))
+                JsonSerializer serializer = new JsonSerializer();
+                serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
+
+                serializer.Formatting = Formatting.Indented;
+
+                lock (this.playlistListLock)
                 {
-                    serializer.Serialize(writer, this.playlistList);
+                    AtomicFileWriter.WriteJsonAtomic(this.playlistListFilePath, serializer, this.playlistList);
                 }
+
+                Tracer.Write($"JsonSerializationContent.SerializePlaylistList: End.");
             }
-
-            Tracer.Write($"JsonSerializationContent.SerializePlaylistList: End.");
-
-            lock (this.serializationEnabledLock)
+            finally
             {
-                this.openWritesCount--;
-                if (this.openWritesCountDown != null)
-                {
-                    this.openWritesCountDown.Signal();
-                }
+                this.EndWrite();
             }
         }
 
@@ -252,39 +242,28 @@ namespace Drexel.VidUp.Json.Content
         {
             Tracer.Write($"JsonSerializationContent.SerializeYoutubeAccountList: Start.");
 
-            lock (this.serializationEnabledLock)
+            if (!this.BeginWrite())
             {
-                if (!this.serializationEnabled)
-                {
-                    Tracer.Write($"JsonSerializationContent.SerializeYoutubeAccountList: End, serialization disabled.");
-                    return;
-                }
-
-                this.openWritesCount++;
+                Tracer.Write($"JsonSerializationContent.SerializeYoutubeAccountList: End, serialization disabled.");
+                return;
             }
 
-            JsonSerializer serializer = new JsonSerializer();
-
-            serializer.Formatting = Formatting.Indented;
-
-            lock (this.youtubeAccountList)
-            { 
-                using (StreamWriter sw = new StreamWriter(this.youtubeAccountListFilePath))
-                using (JsonWriter writer = new JsonTextWriter(sw))
-                {
-                    serializer.Serialize(writer, this.youtubeAccountList);
-                }
-            }
-
-            Tracer.Write($"JsonSerializationContent.SerializeYoutubeAccountList: End.");
-
-            lock (this.serializationEnabledLock)
+            try
             {
-                this.openWritesCount--;
-                if (this.openWritesCountDown != null)
+                JsonSerializer serializer = new JsonSerializer();
+
+                serializer.Formatting = Formatting.Indented;
+
+                lock (this.youtubeAccountListLock)
                 {
-                    this.openWritesCountDown.Signal();
+                    AtomicFileWriter.WriteJsonAtomic(this.youtubeAccountListFilePath, serializer, this.youtubeAccountList);
                 }
+
+                Tracer.Write($"JsonSerializationContent.SerializeYoutubeAccountList: End.");
+            }
+            finally
+            {
+                this.EndWrite();
             }
         }
 
@@ -292,36 +271,28 @@ namespace Drexel.VidUp.Json.Content
         {
             Tracer.Write($"JsonSerializationContent.SerializeUploadProgress: Start.", TraceLevel.Detailed);
 
-            lock (this.serializationEnabledLock)
+            if (!this.BeginWrite())
             {
-                if (!this.serializationEnabled)
-                {
-                    Tracer.Write($"JsonSerializationContent.SerializeUploadProgress: End, serialization disabled.");
-                    return;
-                }
-
-                this.openWritesCount++;
+                Tracer.Write($"JsonSerializationContent.SerializeUploadProgress: End, serialization disabled.");
+                return;
             }
 
-            JsonSerializer serializer = new JsonSerializer();
-
-            serializer.Formatting = Formatting.Indented;
-
-            using (StreamWriter sw = new StreamWriter(this.uploadProgressFilePath))
-            using (JsonWriter writer = new JsonTextWriter(sw))
+            try
             {
-                serializer.Serialize(writer, progress);
-            }
+                JsonSerializer serializer = new JsonSerializer();
 
-            Tracer.Write($"JsonSerializationContent.SerializeUploadProgress: End.", TraceLevel.Detailed);
+                serializer.Formatting = Formatting.Indented;
 
-            lock (this.serializationEnabledLock)
-            {
-                this.openWritesCount--;
-                if (this.openWritesCountDown != null)
+                lock (this.uploadProgressLock)
                 {
-                    this.openWritesCountDown.Signal();
+                    AtomicFileWriter.WriteJsonAtomic(this.uploadProgressFilePath, serializer, progress);
                 }
+
+                Tracer.Write($"JsonSerializationContent.SerializeUploadProgress: End.", TraceLevel.Detailed);
+            }
+            finally
+            {
+                this.EndWrite();
             }
         }
 
@@ -330,7 +301,12 @@ namespace Drexel.VidUp.Json.Content
             lock (this.serializationEnabledLock)
             {
                 this.serializationEnabled = false;
-                this.openWritesCountDown = new CountdownEvent(this.openWritesCount);
+                //create the event only once, so a second call cannot replace the
+                //event in-flight writes are signaling on (BUG-01).
+                if (this.openWritesCountDown == null)
+                {
+                    this.openWritesCountDown = new CountdownEvent(this.openWritesCount);
+                }
             }
 
             return this.openWritesCountDown;

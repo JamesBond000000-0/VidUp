@@ -22,6 +22,60 @@ namespace Drexel.VidUp.Json.Content
 
         private string thumbnailFallbackImageFolder;
 
+        private readonly List<string> backupRecoveredFiles = new List<string>();
+
+        //Names of data files whose main file was unreadable and which were
+        //recovered from their ".bak" backup instead (BUG-01). The UI shows
+        //this to the user, because the restored data may be slightly older.
+        public IReadOnlyList<string> BackupRecoveredFiles
+        {
+            get => this.backupRecoveredFiles;
+        }
+
+        //Returns the path to read for a data file: the file itself, or its
+        //".bak" backup when the main file is not even parseable JSON anymore
+        //(e.g. truncated by a crash during an old-style direct write).
+        private string getReadFilePath(string filePath)
+        {
+            if (!File.Exists(filePath) || JsonDeserializationContent.isValidJson(filePath))
+            {
+                return filePath;
+            }
+
+            string backupFilePath = filePath + ".bak";
+            if (File.Exists(backupFilePath) && JsonDeserializationContent.isValidJson(backupFilePath))
+            {
+                string fileName = Path.GetFileName(filePath);
+                if (!this.backupRecoveredFiles.Contains(fileName))
+                {
+                    this.backupRecoveredFiles.Add(fileName);
+                }
+
+                Tracer.Write($"JsonDeserializationContent.getReadFilePath: {fileName} is unreadable, falling back to backup file {fileName}.bak.");
+                return backupFilePath;
+            }
+
+            return filePath;
+        }
+
+        private static bool isValidJson(string filePath)
+        {
+            try
+            {
+                using (StreamReader sr = new StreamReader(filePath))
+                using (JsonReader reader = new JsonTextReader(sr))
+                {
+                    JToken.Load(reader);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static bool allPlaylistsDeserialiozed = true;
         private static bool allYoutubeAccountsDeserialiozed = true;
         private static YoutubeAccount youtubeAccountForNullReplacement;
@@ -151,7 +205,7 @@ namespace Drexel.VidUp.Json.Content
             }
 
             JsonSerializer serializer = new JsonSerializer();
-            using (StreamReader sr = new StreamReader(this.uploadProgressFilePath))
+            using (StreamReader sr = new StreamReader(this.getReadFilePath(this.uploadProgressFilePath)))
             using (JsonReader reader = new JsonTextReader(sr))
             {
                 try
@@ -195,7 +249,7 @@ namespace Drexel.VidUp.Json.Content
             }
 
             JsonSerializer serializer = new JsonSerializer();
-            using (StreamReader sr = new StreamReader(this.youtubeAccountListFilePath))
+            using (StreamReader sr = new StreamReader(this.getReadFilePath(this.youtubeAccountListFilePath)))
             using (JsonReader reader = new JsonTextReader(sr))
             {
                 DeserializationRepositoryContent.YoutubeAccountList = serializer.Deserialize<YoutubeAccountList>(reader);
@@ -218,7 +272,7 @@ namespace Drexel.VidUp.Json.Content
             JsonSerializer serializer = new JsonSerializer();
             serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
 
-            using (StreamReader sr = new StreamReader(this.playlistListFilePath))
+            using (StreamReader sr = new StreamReader(this.getReadFilePath(this.playlistListFilePath)))
             using (JsonReader reader = new JsonTextReader(sr))
             {
                 DeserializationRepositoryContent.PlaylistList = serializer.Deserialize<PlaylistList>(reader);
@@ -247,10 +301,21 @@ namespace Drexel.VidUp.Json.Content
             serializer.Converters.Add(new TemplateNullConverter());
             serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
 
-            using (StreamReader sr = new StreamReader(this.allUploadsFilePath))
-            using (JsonReader reader = new JsonTextReader(sr))
+            try
             {
-                JsonDeserializationContent.AllUploads = serializer.Deserialize<List<Upload>>(reader);
+                using (StreamReader sr = new StreamReader(this.getReadFilePath(this.allUploadsFilePath)))
+                using (JsonReader reader = new JsonTextReader(sr))
+                {
+                    JsonDeserializationContent.AllUploads = serializer.Deserialize<List<Upload>>(reader);
+                }
+            }
+            catch (Exception ex)
+            {
+                //a broken uploads file (and no readable backup, see getReadFilePath)
+                //must not abort the whole startup (BUG-01). Continue with an empty
+                //list and leave the broken file untouched on disk.
+                Tracer.Write($"JsonDeserializationContent.deserializeAllUploads: uploads storage file could not be deserialized ({ex.GetType().Name}: {ex.Message}), continuing with empty uploads list.");
+                JsonDeserializationContent.AllUploads = new List<Upload>();
             }
 
             Tracer.Write($"JsonDeserializationContent.deserializeAllUploads: End.");
@@ -273,7 +338,7 @@ namespace Drexel.VidUp.Json.Content
             serializer.Converters.Add(new CultureInfoCultureStringConverter());
             serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
 
-            using (StreamReader sr = new StreamReader(this.templateListFilePath))
+            using (StreamReader sr = new StreamReader(this.getReadFilePath(this.templateListFilePath)))
             using (JsonReader reader = new JsonTextReader(sr))
             {
                 //set reader to templateList to avoid creation of TemplateList which will cause addition of event listeners etc. in constructor
@@ -310,10 +375,24 @@ namespace Drexel.VidUp.Json.Content
             if (JsonDeserializationContent.AllUploads != null && this.templates != null)
             {
                 Dictionary<Guid,Guid> uploadTemplateMap = new Dictionary<Guid, Guid>();
-                using (StreamReader sr = new StreamReader(this.allUploadsFilePath))
-                using (JsonReader reader = new JsonTextReader(sr))
+                JArray jUploads;
+                try
                 {
-                    JArray jUploads = JArray.Load(reader);
+                    using (StreamReader sr = new StreamReader(this.getReadFilePath(this.allUploadsFilePath)))
+                    using (JsonReader reader = new JsonTextReader(sr))
+                    {
+                        jUploads = JArray.Load(reader);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    //unreadable uploads file (already handled in deserializeAllUploads):
+                    //continue without template assignments instead of aborting startup.
+                    Tracer.Write($"JsonDeserializationContent.setTemplateOnUploads: uploads storage file could not be read again ({ex.GetType().Name}: {ex.Message}), skipping template assignment.");
+                    return false;
+                }
+
+                {
                     foreach (JToken jUpload in jUploads)
                     {
                         string uploadGuid = jUpload["guid"].Value<string>();
@@ -362,7 +441,7 @@ namespace Drexel.VidUp.Json.Content
             JsonSerializer serializer = new JsonSerializer();
 
             UploadListGuids guids;
-            using (StreamReader sr = new StreamReader(uploadListFilePath))
+            using (StreamReader sr = new StreamReader(this.getReadFilePath(this.uploadListFilePath)))
             using (JsonReader reader = new JsonTextReader(sr))
             {
                 guids = serializer.Deserialize<UploadListGuids>(reader);

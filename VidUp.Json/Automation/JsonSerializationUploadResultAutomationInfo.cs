@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.IO;
+using Drexel.VidUp.Json.Content;
 using Drexel.VidUp.Utils;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -9,6 +10,7 @@ namespace Drexel.VidUp.Json.Settings
     public class JsonSerializationUploadResultAutomationInfo
     {
         private string serializationFolder;
+        private object serializationLock = new object();
         public static JsonSerializationUploadResultAutomationInfo JsonSerializer;
 
         public JsonSerializationUploadResultAutomationInfo(string serializationFolder)
@@ -26,12 +28,12 @@ namespace Drexel.VidUp.Json.Settings
             serializer.Formatting = Formatting.Indented;
             serializer.NullValueHandling = NullValueHandling.Ignore;
 
-            using (StreamWriter sw = new StreamWriter(Path.Combine(serializationFolder, fileName)))
-            using (JsonWriter writer = new JsonTextWriter(sw))
+            //same protection as the content serialization (BUG-01/BUG-13):
+            //dedicated lock and atomic write with one .bak generation.
+            lock (this.serializationLock)
             {
-                serializer.Serialize(writer, uploadResultAutomationInfo);
+                AtomicFileWriter.WriteJsonAtomic(Path.Combine(serializationFolder, fileName), serializer, uploadResultAutomationInfo);
             }
         }
     }
 }
-
