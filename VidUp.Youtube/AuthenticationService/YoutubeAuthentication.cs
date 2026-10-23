@@ -8,12 +8,12 @@ using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Drexel.VidUp.Business;
 using Drexel.VidUp.Json.Content;
 using Drexel.VidUp.Utils;
 using Drexel.VidUp.Youtube.Http;
-using Newtonsoft.Json;
 
 namespace Drexel.VidUp.Youtube.AuthenticationService
 {
@@ -65,17 +65,17 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
                 }
 
                 //here we should have the refresh token
-                // builds the  request
-                string tokenRequestBody = $"refresh_token={refreshToken}&client_id={clientId}&client_secret={clientSecret}&grant_type=refresh_token";
-
-                // sends the request
-                byte[] contentBytes = Encoding.ASCII.GetBytes(tokenRequestBody);
-                using (ByteArrayContent byteArrayContent = new ByteArrayContent(contentBytes))
+                //builds the request (FormUrlEncodedContent url-encodes the values,
+                //the refresh token and the client secret must not be sent raw, BUG-10)
+                using (FormUrlEncodedContent formContent = new FormUrlEncodedContent(new[]
                 {
-                    byteArrayContent.Headers.ContentLength = contentBytes.Length;
-                    byteArrayContent.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
-
-                    using (HttpResponseMessage resposneMessage = await YoutubeAuthentication.client.PostAsync(YoutubeAuthentication.tokenEndpoint, byteArrayContent).ConfigureAwait(false))
+                    new KeyValuePair<string, string>("refresh_token", refreshToken),
+                    new KeyValuePair<string, string>("client_id", clientId),
+                    new KeyValuePair<string, string>("client_secret", clientSecret),
+                    new KeyValuePair<string, string>("grant_type", "refresh_token")
+                }))
+                {
+                    using (HttpResponseMessage resposneMessage = await YoutubeAuthentication.client.PostAsync(YoutubeAuthentication.tokenEndpoint, formContent).ConfigureAwait(false))
                     {
                         string content = await resposneMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
                         if (!resposneMessage.IsSuccessStatusCode)
@@ -83,9 +83,7 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
                             throw new HttpStatusException(resposneMessage.ReasonPhrase, (int)resposneMessage.StatusCode, content);
                         }
 
-                        Dictionary<string, string> tokenEndpointDecoded = JsonConvert.DeserializeObject<Dictionary<string, string>>(await resposneMessage.Content.ReadAsStringAsync().ConfigureAwait(false));
-
-                        AccessToken accessToken = new AccessToken(tokenEndpointDecoded["access_token"], DateTime.Now.AddSeconds(Convert.ToInt32(tokenEndpointDecoded["expires_in"])));
+                        AccessToken accessToken = TokenResponseParser.ParseAccessTokenResponse(content);
 
                         Tracer.Write($"YoutubeAuthentication.GetNewAccessTokenAsync: End.");
                         return accessToken;
@@ -123,7 +121,10 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
 
                 Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Starting http server.");
                 // Creates an HttpListener to listen for requests on that redirect URI.
-                HttpListener http = new HttpListener();
+                // The using releases the port on every path, previously the listener
+                // stayed open when an exception occurred before Stop() (BUG-10).
+                using (HttpListener http = new HttpListener())
+                {
                 http.Prefixes.Add(redirectUri);
                 http.Start();
 
@@ -136,8 +137,11 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
                     clientSecret = Settings.Instance.UserSettings.ClientSecret;
                 }
 
-                // Creates the OAuth 2.0 authorization request.
-                string authorizationRequest = $"{YoutubeAuthentication.authorizationEndpoint}?response_type=code&scope={Uri.EscapeDataString(YoutubeAuthentication.scopes)}&redirect_uri={Uri.EscapeDataString(redirectUri)}&client_id={clientId}&state={state}&code_challenge={codeChallenge}&code_challenge_method={codeChallengeMethod}";
+                // Creates the OAuth 2.0 authorization request. access_type=offline
+                // (and forcing the consent screen) makes Google return a refresh
+                // token also on re-sign-in, without it the token response contains
+                // none and the sign-in dead-ended (BUG-10).
+                string authorizationRequest = $"{YoutubeAuthentication.authorizationEndpoint}?response_type=code&scope={Uri.EscapeDataString(YoutubeAuthentication.scopes)}&redirect_uri={Uri.EscapeDataString(redirectUri)}&client_id={clientId}&state={state}&code_challenge={codeChallenge}&code_challenge_method={codeChallengeMethod}&access_type=offline&prompt=consent";
 
                 ProcessStartInfo processStartInfo = new ProcessStartInfo(authorizationRequest)
                 {
@@ -149,8 +153,22 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
                 // Opens request in the browser.
                 Process.Start(processStartInfo);
                 Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Waiting for user input.");
-                // Waits for the OAuth authorization response.
-                HttpListenerContext context = await http.GetContextAsync().ConfigureAwait(false);
+                // Waits for the OAuth authorization response, but not forever:
+                // closing the browser without signing in must not hang the app (BUG-10).
+                HttpListenerContext context;
+                using (CancellationTokenSource waitTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
+                {
+                    try
+                    {
+                        context = await http.GetContextAsync().WaitAsync(waitTimeout.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Timed out waiting for the sign-in response.");
+                        Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: End.");
+                        throw new AuthenticationException("Timed out waiting for the sign-in response.", true);
+                    }
+                }
 
                 Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Sending response.");
                 // Sends an HTTP response to the browser.
@@ -197,18 +215,20 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
 
                 Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: State ok.");
                 // Starts the code exchange for refresh token at the token endpoint.
-                // builds the  request
-                string tokenRequestBody = $"code={code}&redirect_uri={Uri.EscapeDataString(redirectUri)}&client_id={clientId}&code_verifier={codeVerifier}&client_secret={clientSecret}&scope=&grant_type=authorization_code";
-
-                Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Getting refresh token.");
-                // sends the request
-                byte[] contentBytes = Encoding.ASCII.GetBytes(tokenRequestBody);
-                using (ByteArrayContent byteArrayContent = new ByteArrayContent(contentBytes))
+                // FormUrlEncodedContent url-encodes the values (BUG-10).
+                using (FormUrlEncodedContent formContent = new FormUrlEncodedContent(new[]
                 {
-                    byteArrayContent.Headers.ContentLength = contentBytes.Length;
-                    byteArrayContent.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
-
-                    using (HttpResponseMessage responseMessage = await YoutubeAuthentication.client.PostAsync(YoutubeAuthentication.tokenEndpoint, byteArrayContent).ConfigureAwait(false))
+                    new KeyValuePair<string, string>("code", code),
+                    new KeyValuePair<string, string>("redirect_uri", redirectUri),
+                    new KeyValuePair<string, string>("client_id", clientId),
+                    new KeyValuePair<string, string>("code_verifier", codeVerifier),
+                    new KeyValuePair<string, string>("client_secret", clientSecret),
+                    new KeyValuePair<string, string>("scope", string.Empty),
+                    new KeyValuePair<string, string>("grant_type", "authorization_code")
+                }))
+                {
+                    Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Getting refresh token.");
+                    using (HttpResponseMessage responseMessage = await YoutubeAuthentication.client.PostAsync(YoutubeAuthentication.tokenEndpoint, formContent).ConfigureAwait(false))
                     {
                         string content = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
                         if (!responseMessage.IsSuccessStatusCode)
@@ -216,20 +236,32 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
                             throw new HttpStatusException(responseMessage.ReasonPhrase, (int)responseMessage.StatusCode, content);
                         }
 
-                        Dictionary<string, string> tokenEndpointDecoded = JsonConvert.DeserializeObject<Dictionary<string, string>>(await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false));
-                        if (Settings.Instance.UserSettings.UseCustomYouTubeApiCredentials)
+                        //Google does not return a refresh_token on every sign-in.
+                        //Keep the stored one instead of crashing or discarding it (BUG-10).
+                        bool useCustomCredentials = Settings.Instance.UserSettings.UseCustomYouTubeApiCredentials;
+                        string existingRefreshToken = useCustomCredentials ? youtubeAccount.RefreshTokenCustomApiCredentials : youtubeAccount.RefreshToken;
+                        string refreshToken = TokenResponseParser.GetRefreshTokenToStore(content, existingRefreshToken);
+                        if (string.IsNullOrWhiteSpace(refreshToken))
                         {
-                            Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Setting default refresh token.");
-                            youtubeAccount.RefreshTokenCustomApiCredentials = tokenEndpointDecoded["refresh_token"];
+                            Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: No refresh token in the response and none stored.");
+                            Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: End.");
+                            throw new AuthenticationException("The sign-in response did not contain a refresh token.", true);
+                        }
+
+                        if (useCustomCredentials)
+                        {
+                            Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Setting custom refresh token.");
+                            youtubeAccount.RefreshTokenCustomApiCredentials = refreshToken;
                         }
                         else
                         {
-                            Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Setting custom refresh token.");
-                            youtubeAccount.RefreshToken = tokenEndpointDecoded["refresh_token"];
+                            Tracer.Write($"YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync: Setting default refresh token.");
+                            youtubeAccount.RefreshToken = refreshToken;
                         }
 
                         JsonSerializationContent.JsonSerializer.SerializeYoutubeAccountList();
                     }
+                }
                 }
             }
             catch (HttpStatusException e)
@@ -252,14 +284,18 @@ namespace Drexel.VidUp.Youtube.AuthenticationService
             Tracer.Write($"YoutubeAuthentication.DeleteRefreshTokenOnYoutubeAccountAsync: Start.");
             if (Settings.Instance.UserSettings.UseCustomYouTubeApiCredentials)
             {
-                Tracer.Write($"YoutubeAuthentication.DeleteRefreshTokenOnYoutubeAccountAsync: Deleting default refresh token.");
+                Tracer.Write($"YoutubeAuthentication.DeleteRefreshTokenOnYoutubeAccountAsync: Deleting custom refresh token.");
                 youtubeAccount.RefreshTokenCustomApiCredentials = null;
             }
             else
             {
-                Tracer.Write($"YoutubeAuthentication.DeleteRefreshTokenOnYoutubeAccountAsync: Deleting custom refresh token.");
+                Tracer.Write($"YoutubeAuthentication.DeleteRefreshTokenOnYoutubeAccountAsync: Deleting default refresh token.");
                 youtubeAccount.RefreshToken = null;
             }
+
+            //without this the cached access token stayed usable for up to its
+            //remaining lifetime (about an hour) after signing out (BUG-10)
+            HttpHelper.RemoveAccessToken(youtubeAccount);
 
             Tracer.Write($"YoutubeAuthentication.DeleteRefreshTokenOnYoutubeAccountAsync: End.");
         }

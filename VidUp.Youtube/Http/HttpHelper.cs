@@ -48,6 +48,14 @@ namespace Drexel.VidUp.Youtube.Http
             HttpHelper.youtubeAccessTokenExpiryByAccount.Clear();
         }
 
+        public static void RemoveAccessToken(YoutubeAccount youtubeAccount)
+        {
+            if (youtubeAccount != null)
+            {
+                HttpHelper.youtubeAccessTokenExpiryByAccount.Remove(youtubeAccount);
+            }
+        }
+
         public static async Task<HttpRequestMessage> GetAuthenticatedRequestMessageAsync(YoutubeAccount youtubeAccount, HttpMethod method, string uri)
         {
             Tracer.Write($"HttpHelper.GetAuthenticatedRequestMessageAsync: Start with uri.");
