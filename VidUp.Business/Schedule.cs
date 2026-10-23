@@ -90,14 +90,22 @@ namespace Drexel.VidUp.Business
 
                     if (monthRelativeCombination == null)
                     {
+                        //the combination is not (or not yet) in the list, e.g. its day times
+                        //were kept after deactivation. The entry is preserved as is; it must
+                        //NOT be added to the list, that would silently reactivate it. With
+                        //value equality on MonthRelativeCombination the entry still resolves
+                        //once the combination becomes active again (BUG-22).
                         monthRelativeCombination = new MonthRelativeCombination(monthRelativeCombinationKeyValuePair.Key.DayPosition, monthRelativeCombinationKeyValuePair.Key.DayOfWeek);
                     }
 
-                    this.monthlyMonthRelativeBasedDayTimes.Add(monthRelativeCombination, new TimeSpan?[3]);
+                    this.monthlyMonthRelativeBasedDayTimes[monthRelativeCombination] = new TimeSpan?[3];
 
                     for (int index = 0; index < 3; index++)
                     {
-                        TimeSpan? timeSpan = monthRelativeCombinationKeyValuePair.Value[index];
+                        //JSON data can contain fewer than three time slots (BUG-22)
+                        TimeSpan? timeSpan = monthRelativeCombinationKeyValuePair.Value != null && index < monthRelativeCombinationKeyValuePair.Value.Length
+                            ? monthRelativeCombinationKeyValuePair.Value[index]
+                            : null;
                         this.monthlyMonthRelativeBasedDayTimes[monthRelativeCombination][index] = null;
                         if (timeSpan != null)
                         {
@@ -408,7 +416,7 @@ namespace Drexel.VidUp.Business
                         key.DayPosition == dayTimes.Key.DayPosition &&
                         key.DayOfWeek == dayTimes.Key.DayOfWeek).ToArray();
 
-                if (combinations.Length < 0 || combinations.Length > 1)
+                if (combinations.Length > 1)
                 {
                     throw new ArgumentOutOfRangeException("Unexpected MonthRelativeCombination count.");
                 }
@@ -421,14 +429,20 @@ namespace Drexel.VidUp.Business
                 }
                 else
                 {
+                    //as in the serialization setter: keep the entry without activating
+                    //the combination; a copy must reproduce the original, not repair it.
+                    //Value equality keeps the entry resolvable (BUG-22).
                     monthRelativeCombination = new MonthRelativeCombination(dayTimes.Key.DayPosition, dayTimes.Key.DayOfWeek);
                 }
 
-                result.Add(monthRelativeCombination, new TimeSpan?[3]);
+                result[monthRelativeCombination] = new TimeSpan?[3];
 
                 for (int index = 0; index < 3; index++)
                 {
-                    result[monthRelativeCombination][index] = dayTimes.Value[index];
+                    //the stored time slots can be shorter than three entries (BUG-22)
+                    result[monthRelativeCombination][index] = dayTimes.Value != null && index < dayTimes.Value.Length
+                        ? dayTimes.Value[index]
+                        : null;
                 }
             }
 
