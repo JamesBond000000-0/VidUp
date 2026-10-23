@@ -691,6 +691,14 @@ namespace Drexel.VidUp.UI.ViewModels
                 this.uploadStatus = UploadStatus.Uploading;
             }
 
+            //SetThreadExecutionState applies to the calling (UI) thread, so the restore
+            //in the finally block must run on this thread as well. After the awaits below
+            //(ConfigureAwait(false)) this method continues on a thread pool thread,
+            //where the restore silently did nothing before (BUG-02).
+            System.Windows.Threading.Dispatcher uiDispatcher = System.Windows.Application.Current?.Dispatcher;
+
+            try
+            {
             //prevent sleep mode
             PowerSavingHelper.DisablePowerSaving();
 
@@ -719,7 +727,6 @@ namespace Drexel.VidUp.UI.ViewModels
 
             this.uploadStatus = UploadStatus.NotUploading;
 
-            //needs to be after PowerSavingHelper.EnablePowerSaving(); so that StandBy is not prevented.
             this.onUploadFinished(new UploadListFinishedEventArgs(uploadResult == UploaderResult.DataSent, uploadStopped));
             this.uploadStatus = UploadStatus.NotUploading;
 
@@ -729,8 +736,29 @@ namespace Drexel.VidUp.UI.ViewModels
             }
 
             this.finishedUploads.Clear();
+            }
+            catch (Exception e)
+            {
+                //without the catch and finally an exception left uploadStatus at
+                //Uploading (no upload could be started again in this session), left
+                //sleep mode disabled and, as this method is async void, crashed
+                //the app (BUG-02)
+                Tracer.Write($"UploadRibbonViewModel.startUploadingAsync: Unexpected Exception: {e.ToString()}");
+            }
+            finally
+            {
+                this.uploader = null;
+                this.uploadStatus = UploadStatus.NotUploading;
 
-            PowerSavingHelper.EnablePowerSaving();
+                if (uiDispatcher != null && !uiDispatcher.CheckAccess())
+                {
+                    uiDispatcher.Invoke(() => PowerSavingHelper.EnablePowerSaving());
+                }
+                else
+                {
+                    PowerSavingHelper.EnablePowerSaving();
+                }
+            }
         }
 
         private void executelFinalAutomationExecutions()
