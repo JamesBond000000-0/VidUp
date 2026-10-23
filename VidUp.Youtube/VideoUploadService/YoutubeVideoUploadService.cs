@@ -76,6 +76,26 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
             }
         }
 
+        //Replaces the current upload stream and disposes the replaced one, so retries
+        //do not leak the file handle and the stream buffers (BUG-15). The field stays
+        //static because the progress display reads it through the static accessors
+        //above, but its lifecycle is now owned here instead of a using on the first
+        //instance only.
+        private static void setStream(ThrottledBufferedStream newStream)
+        {
+            ThrottledBufferedStream oldStream = YoutubeVideoUploadService.stream;
+            YoutubeVideoUploadService.stream = newStream;
+            if (oldStream != null && !object.ReferenceEquals(oldStream, newStream))
+            {
+                oldStream.Dispose();
+            }
+        }
+
+        private static void clearStream()
+        {
+            YoutubeVideoUploadService.setStream(null);
+        }
+
         public static async Task<UploadResult> UploadAsync(Upload upload, Action<Upload> resumableSessionUriSet, CancellationToken cancellationToken, AutoResetEvent resetEvent)
         {
             Tracer.Write($"YoutubeVideoUploadService.Upload: Start with upload: {upload.FilePath}, maxUploadInBytesPerSecond: {YoutubeVideoUploadService.maxUploadInBytesPerSecond}.");
@@ -117,7 +137,8 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 JsonSerializationContent.JsonSerializer.SerializeAllUploads();
                 Tracer.Write($"YoutubeVideoUploadService.Upload: Initial resume position: {upload.BytesSent}.");
 
-                using (YoutubeVideoUploadService.stream = new ThrottledBufferedStream(upload.FilePath, upload.BytesSent, YoutubeVideoUploadService.maxUploadInBytesPerSecond))
+                YoutubeVideoUploadService.setStream(new ThrottledBufferedStream(upload.FilePath, upload.BytesSent, YoutubeVideoUploadService.maxUploadInBytesPerSecond));
+                try
                 {
                     long fileLength = upload.FileLength;
                     
@@ -140,7 +161,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                                 resetEvent.WaitOne();
                                 upload.UploadStatus = UplStatus.Failed;
 
-                                YoutubeVideoUploadService.stream = null;
+                                YoutubeVideoUploadService.clearStream();
                                 return YoutubeVideoUploadService.getResult(upload.BytesSent, initialUploadBytesSent, false);
                             }
 
@@ -153,7 +174,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                             ResumeCheckResult retryCheck = await YoutubeVideoUploadService.getResumePositionAsync(upload, resetEvent).ConfigureAwait(false);
                             if (retryCheck == ResumeCheckResult.Failed)
                             {
-                                YoutubeVideoUploadService.stream = null;
+                                YoutubeVideoUploadService.clearStream();
                                 return YoutubeVideoUploadService.getResult(upload.BytesSent, initialUploadBytesSent, false);
                             }
 
@@ -164,13 +185,12 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                                 resetEvent.WaitOne();
                                 upload.UploadStatus = UplStatus.Finished;
 
-                                YoutubeVideoUploadService.stream?.Dispose();
-                                YoutubeVideoUploadService.stream = null;
+                                YoutubeVideoUploadService.clearStream();
                                 return UploadResult.Finished;
                             }
 
                             //HttpClient disposed inputStream...
-                            YoutubeVideoUploadService.stream = new ThrottledBufferedStream(upload.FilePath, upload.BytesSent, YoutubeVideoUploadService.maxUploadInBytesPerSecond); ;
+                            YoutubeVideoUploadService.setStream(new ThrottledBufferedStream(upload.FilePath, upload.BytesSent, YoutubeVideoUploadService.maxUploadInBytesPerSecond));
 
                             Tracer.Write($"YoutubeVideoUploadService.Upload: Upload retry resume postion: {upload.BytesSent}.");
 
@@ -254,7 +274,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                                     resetEvent.WaitOne();
                                     upload.UploadStatus = UplStatus.Stopped;
 
-                                    YoutubeVideoUploadService.stream = null;
+                                    YoutubeVideoUploadService.clearStream();
                                     return YoutubeVideoUploadService.getResult(upload.BytesSent, initialUploadBytesSent, true);
                                 }
                             }
@@ -297,6 +317,10 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                     }
                     while(error);
                 }
+                finally
+                {
+                    YoutubeVideoUploadService.clearStream();
+                }
             }
             catch (Exception e)
             {
@@ -307,11 +331,10 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 resetEvent.WaitOne();
                 upload.UploadStatus = UplStatus.Failed;
 
-                YoutubeVideoUploadService.stream = null;
+                YoutubeVideoUploadService.clearStream();
                 return UploadResult.FailedWithoutDataSent;
             }
 
-            YoutubeVideoUploadService.stream = null;
             Tracer.Write($"YoutubeVideoUploadService.Upload: End.");
             return UploadResult.Finished;
         }

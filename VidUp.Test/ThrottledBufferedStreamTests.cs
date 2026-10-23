@@ -165,6 +165,29 @@ namespace Drexel.VidUp.Test
         }
 
         [Test]
+        public void Dispose_ReleasesFileLock()
+        {
+            //BUG-15: a replaced or finished upload stream must not keep the video file locked
+            string filePath = Path.Combine(TestContext.CurrentContext.WorkDirectory, "throttled_stream_lock_test.bin");
+            File.WriteAllBytes(filePath, new byte[1000]);
+
+            try
+            {
+                ThrottledBufferedStream stream = new ThrottledBufferedStream(filePath, 0, 0);
+                stream.Dispose();
+
+                using (FileStream exclusive = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    Assert.That(exclusive.Length, Is.EqualTo(1000));
+                }
+            }
+            finally
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        [Test]
         public void Dispose_UnblocksWaitingReader()
         {
             BlockingStream baseStream = new BlockingStream();
@@ -175,7 +198,9 @@ namespace Drexel.VidUp.Test
                 try
                 {
                     byte[] buffer = new byte[4096];
+#pragma warning disable CA2022 //the read result is irrelevant here, only unblocking matters
                     stream.Read(buffer, 0, buffer.Length);
+#pragma warning restore CA2022
                 }
                 catch (Exception)
                 {
