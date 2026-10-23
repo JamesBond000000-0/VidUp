@@ -87,5 +87,24 @@ Release 構成、`--no-incremental` で実測。警告数は依存プロジェ�
 - 全7プロジェクト 0 エラー、警告数は移行後ベースラインと完全一致（UI 171 / Test 176 ほか）。
 
 未確認（Windows 実機が必要）:
-- [ ] 既存テスト48件の実行（Phase 0 からの継続事項）
+- [x] 既存テストの実行 → §7 の Wine 検証で解決（発見47件すべて合格）
 - [ ] 起動時の .bak 回復 MessageBox の実表示と、実データでの保存・終了の通し確認
+
+## 7. Wine による実行検証（2026-10-23 実施、Phase 2 完了後）
+
+Linux VM 上に Wine 9.0（Ubuntu 24.04 パッケージ）+ Xvfb の環境を構築し、Windows 実機なしで実行検証を行った。環境の詳細と再現手順（プレフィックス、必須環境変数、VM 再起動時の復旧方法）は開発機の TOOLS.md に記録。
+
+確認できたこと:
+- Wine プレフィックス（win64）に Windows 版 .NET 10 SDK 10.0.100 を配置し、`dotnet --list-sdks` / ランタイム一覧（NETCore / AspNetCore / WindowsDesktop 10.0.0）を確認。
+- 最小の WPF アプリ（net10.0-windows、Window と Application の生成）が Wine 上でビルド・実行できる。
+- **VidUp.Test を vstest で実行し、発見された 47 件すべて合格（Failed: 0）**。プレフィックス再作成後も含め3回再現。ソース上の [Test] 属性は 48 件あり、1 件は NUnit に発見されない（本家時点からの特性で、本フォークの変更とは無関係。要調査事項として残す）。
+- GitHub Actions 製インストーラ（v1.17.1-fork.1）の収録物を innoextract で展開し、その VidUp 本体を Wine で起動。初回起動の初期化が完了し、Documents\VidUp に settings.json（既定値）・accountlist.json・画像フォルダ群が正しく生成されることを確認。
+
+環境上の制約・注意:
+- vstest↔testhost の通信は `DOTNET_SYSTEM_NET_DISABLEIPV6=1` が必須（無いと Wine の IPv4 マップ IPv6 ソケットで通信が化け、ハンドシェイク直後に切断される。実測で切り分け済み）。接続タイムアウトは `VSTEST_CONNECTION_TIMEOUT=600000` を推奨。
+- 32bit 実行はこの VM では使えない（wine32 導入で 64bit 側まで segfault するようになり、purge で復旧）。そのため 32bit の Inno インストーラ本体は実行できず、上記の展開による検証で代替した。インストーラ自体の実行確認は実機のみ。
+- Wine 上のビルドは非常に遅い（小さなアプリでも初回約10分）。ビルドは Linux 側（EnableWindowsTargeting）で行い、実行だけ Wine に回すのが速い。
+
+残る実機確認事項:
+- [ ] 画面の見た目（MaterialDesignThemes 5.4.0 の表示）と対話操作
+- [ ] インストーラの実行（.NET 10 未導入機での判定・導入）とアンインストール
