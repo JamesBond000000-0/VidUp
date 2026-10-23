@@ -58,6 +58,8 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private List<FileSystemWatcher> filesSystemWatchers = new List<FileSystemWatcher>();
         private BlockingCollection<string> filesCreatedCollection = new BlockingCollection<string>();
+        private CancellationTokenSource fileCreationCancellationTokenSource;
+        private Task fileCreationObserverTask;
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -550,17 +552,45 @@ namespace Drexel.VidUp.UI.ViewModels
                 }
             }
 
-            Task.Run(() => this.observeFileCreationCollection());              
+            if (this.fileCreationObserverTask == null)
+            {
+                this.fileCreationCancellationTokenSource = new CancellationTokenSource();
+                this.fileCreationObserverTask = Task.Run(() => this.observeFileCreationCollection(this.fileCreationCancellationTokenSource.Token));
+            }
         }
 
-        private async void observeFileCreationCollection()
+        private async Task observeFileCreationCollection(CancellationToken cancellationToken)
         {
-            while (true)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                string path = this.filesCreatedCollection.Take();
-                bool canOpen = false;
-                while (!canOpen)
+                string path;
+                try
                 {
+                    path = this.filesCreatedCollection.Take(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (InvalidOperationException)
+                {
+                    //the collection was marked as complete in Close()
+                    return;
+                }
+
+                //a file which stays locked (or was deleted) must not block all later
+                //files forever: retry for a bounded time, then skip it. Before, the
+                //first unopenable file stalled the whole automation import (BUG-08)
+                bool canOpen = false;
+                bool vanished = false;
+                for (int attempt = 0; attempt < 10 && !cancellationToken.IsCancellationRequested; attempt++)
+                {
+                    if (!File.Exists(path))
+                    {
+                        vanished = true;
+                        break;
+                    }
+
                     try
                     {
                         File.OpenWrite(path).Close();
@@ -568,19 +598,52 @@ namespace Drexel.VidUp.UI.ViewModels
                     }
                     catch
                     {
-                        await Task.Delay(30000);
-                        Tracer.Write($"MainWindowViewModel.setFileSystemWatchersForAutomation: Could not open file {path}.", TraceLevel.Detailed);
+                        Tracer.Write($"MainWindowViewModel.observeFileCreationCollection: Could not open file {path}.", TraceLevel.Detailed);
+                        try
+                        {
+                            await Task.Delay(30000, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
                     }
                 }
 
-                this.AddFiles(new[] { path }, true);
+                if (vanished)
+                {
+                    Tracer.Write($"MainWindowViewModel.observeFileCreationCollection: File {path} does not exist (anymore), skipping it.", TraceLevel.Detailed);
+                    continue;
+                }
+
+                if (!canOpen)
+                {
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        Tracer.Write($"MainWindowViewModel.observeFileCreationCollection: File {path} could not be opened after several retries, skipping it.");
+                    }
+
+                    continue;
+                }
+
+                //AddFiles changes UI collections and must run on the UI thread,
+                //before it was called directly on this thread pool thread (BUG-08)
+                System.Windows.Application.Current?.Dispatcher.Invoke(() => this.AddFiles(new[] { path }, true));
             }
         }
 
         //writes file info to a collection to prevent internal buffer overflow of FileSystemWatcher
         private void onFileCreated(object sender, FileSystemEventArgs e)
         {
-            this.filesCreatedCollection.Add(e.FullPath);
+            try
+            {
+                this.filesCreatedCollection.Add(e.FullPath);
+            }
+            catch (InvalidOperationException)
+            {
+                //the collection was already completed in Close(), the watcher
+                //event came in while shutting down
+            }
         }
 
         private static void deleteAutomationInfoFiles()
@@ -1021,6 +1084,34 @@ namespace Drexel.VidUp.UI.ViewModels
 
         public void Close()
         {
+            //stop the file automation: watchers first, then complete the collection,
+            //cancel the consumer and wait for it to end. Before, Close() stopped
+            //nothing of this and the consumer loop ran forever (BUG-08)
+            foreach (FileSystemWatcher watcher in this.filesSystemWatchers)
+            {
+                watcher.EnableRaisingEvents = false;
+                watcher.Dispose();
+            }
+
+            this.filesSystemWatchers.Clear();
+
+            this.filesCreatedCollection.CompleteAdding();
+            if (this.fileCreationCancellationTokenSource != null)
+            {
+                this.fileCreationCancellationTokenSource.Cancel();
+                try
+                {
+                    this.fileCreationObserverTask?.Wait(TimeSpan.FromSeconds(10));
+                }
+                catch (AggregateException)
+                {
+                    //the consumer was cancelled or faulted while closing, nothing to do
+                }
+
+                this.fileCreationCancellationTokenSource.Dispose();
+                this.fileCreationCancellationTokenSource = null;
+            }
+
             //stop the playlist autoset timer, it kept calling the API and saving
             //settings after the window was closed before (BUG-18)
             if (this.ribbonViewModels != null && this.ribbonViewModels.Count > 2 && this.ribbonViewModels[2] is PlaylistRibbonViewModel playlistRibbonViewModel)
