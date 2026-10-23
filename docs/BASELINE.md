@@ -52,3 +52,21 @@ Release 構成、`--no-incremental` で実測。警告数は依存プロジェ�
 - 移行先: .NET 10（`net10.0` / `net10.0-windows7.0`）。SDK 10.0.100 で net8.0 のままビルドできることは本記録で確認済みのため、移行時の問題はターゲット変更とパッケージ更新由来に限定できる。
 - 移行時に同時に直すもの（計画書 Phase 1）: インストーラ `setup.iss` の .NET 判定と案内文、`VidUp.Setup/Program.cs` の `net6.0-windows` 残骸パス。
 - 移行後の合格条件: 本書 §1 と同じ手順で全プロジェクト 0 エラー、警告数が大きく増えないこと。
+
+## 5. Phase 1 結果（.NET 10 移行、2026-10-23）
+
+変更内容:
+- TFM: 5プロジェクト `net8.0` → `net10.0`、UI `net8.0-windows7.0` → `net10.0-windows7.0`、Test `net8.0-windows` → `net10.0-windows`
+- パッケージ: MaterialDesignThemes 5.0.0 → **5.4.0**（net10.0-windows7.0 用 lib を含むことを実物で確認）、Newtonsoft.Json 13.0.3 → 13.0.4、MimeTypesMap 1.0.8 → 1.0.9、Microsoft.NET.Test.Sdk 17.9.0 → 18.11.0、NUnit 4.1.0 → **4.6.1**、NUnit3TestAdapter 4.5.0 → 5.2.0
+  - NUnit は最新の 5.0.0 ではなく 4.x 最新の 4.6.1 を採用した。メジャーバージョン更新によるテストコード側の破壊的変更を Phase 1 に混ぜないため（アダプタ 5.2.0 は NUnit 4.x 対応の最終系統）。
+- `global.json` を追加（SDK 10.0.100、rollForward: latestFeature）。
+- インストーラ: `setup.iss` の判定を `IsNet10Installed` に変更（バージョンフォルダ先頭2文字が `10` かで判定。案内文とダウンロード URL も 10.0 に）。`VidUp.Setup/Program.cs` の残骸パス `net6.0-windows` → `net10.0-windows7.0`（2箇所）。
+
+検証結果（§1 と同じ手順、SDK 10.0.100）:
+- **全7プロジェクト 0 エラー**。`--no-incremental` の警告数は UI **171** / Test **176** で、移行前と**完全一致**（新規警告なし）。
+- 生成された `VidUp.runtimeconfig.json` が `Microsoft.WindowsDesktop.App 10.0.0` を要求すること、出力フォルダが `net10.0-windows7.0` になり Program.cs の修正パスと一致することを確認。
+
+未確認（Windows 実機が必要）:
+- [ ] 既存テスト48件の実行（移行前後とも未実施。§2 の未決事項を引き継ぐ）
+- [ ] MaterialDesignThemes 5.4.0 での画面表示確認（テーマ側の見た目の差分チェック）
+- [ ] Inno Setup でのインストーラ生成と、.NET 10 未導入環境での判定メッセージ確認
