@@ -19,8 +19,15 @@ namespace Drexel.VidUp.Json.Content
             {
                 return null;
             }
-            
-            Upload upload = JsonDeserializationContent.AllUploads.Find(upload2 => upload2.Guid == Guid.Parse(guidString));
+
+            if (!Guid.TryParse(guidString, out Guid uploadGuid))
+            {
+                //malformed guid: treat like a missing upload (BUG-21), the caller
+                //removes null entries from template uploads and reserializes.
+                return null;
+            }
+
+            Upload upload = JsonDeserializationContent.AllUploads.Find(upload2 => upload2.Guid == uploadGuid);
             if (upload == null)
             {
                 return null;

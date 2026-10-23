@@ -17,7 +17,25 @@ namespace Drexel.VidUp.Json.Content
 
             //must be AllCultureInfos as culture can be set on template before cultures were filtered in settings.
             //So in a template e.g. can be a culture which is later filtered out.
-            return Cultures.AllCultureInfos.Where(culture => culture.Name == (string)reader.Value).First();
+            string cultureName = (string)reader.Value;
+            CultureInfo culture = Cultures.AllCultureInfos.Where(cult => cult.Name == cultureName).FirstOrDefault();
+            if (culture == null)
+            {
+                //a culture name unknown on this OS (e.g. written by a newer Windows
+                //version) must not fail the whole deserialization (BUG-21). Try to
+                //resolve it directly, otherwise fall back to no culture and flag
+                //the file for reserialization.
+                try
+                {
+                    culture = CultureInfo.GetCultureInfo(cultureName);
+                }
+                catch (CultureNotFoundException)
+                {
+                    JsonDeserializationContent.AllCulturesDeserialized = false;
+                }
+            }
+
+            return culture;
         }
 
         public override void WriteJson(JsonWriter writer, CultureInfo value, JsonSerializer serializer)

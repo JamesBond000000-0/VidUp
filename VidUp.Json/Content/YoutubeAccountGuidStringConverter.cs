@@ -10,14 +10,17 @@ namespace Drexel.VidUp.Json.Content
         public override YoutubeAccount ReadJson(JsonReader reader, Type objectType, YoutubeAccount existingValue, bool hasExistingValue, JsonSerializer serializer)
         {
             string guid = (string)reader.Value;
-            if (string.IsNullOrWhiteSpace(guid))
+            YoutubeAccount account = null;
+            if (!string.IsNullOrWhiteSpace(guid) && Guid.TryParse(guid, out Guid accountGuid))
             {
-                throw new SerializationException("Youtube Account not found.");
+                account = DeserializationRepositoryContent.YoutubeAccountList.Find(acc => acc.Guid == accountGuid);
             }
 
-            YoutubeAccount account = DeserializationRepositoryContent.YoutubeAccountList.Find(acc => acc.Guid == Guid.Parse(guid));
             if (account == null)
             {
+                //empty, malformed or unknown account guid: use the replacement
+                //account like for a missing account (BUG-21) instead of throwing
+                //and failing the whole deserialization.
                 JsonDeserializationContent.AllYoutubeAccountsDeserialized = false;
                 return JsonDeserializationContent.YoutubeAccountForNullReplacement;
             }

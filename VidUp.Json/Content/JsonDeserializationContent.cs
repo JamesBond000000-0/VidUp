@@ -78,6 +78,8 @@ namespace Drexel.VidUp.Json.Content
 
         private static bool allPlaylistsDeserialiozed = true;
         private static bool allYoutubeAccountsDeserialiozed = true;
+        private static bool allCategoriesDeserialized = true;
+        private static bool allCulturesDeserialized = true;
         private static YoutubeAccount youtubeAccountForNullReplacement;
         public static bool AllPlaylistsDeserialiozed
         {
@@ -87,6 +89,16 @@ namespace Drexel.VidUp.Json.Content
         public static bool AllYoutubeAccountsDeserialized
         {
             set => JsonDeserializationContent.allYoutubeAccountsDeserialiozed = value;
+        }
+
+        public static bool AllCategoriesDeserialized
+        {
+            set => JsonDeserializationContent.allCategoriesDeserialized = value;
+        }
+
+        public static bool AllCulturesDeserialized
+        {
+            set => JsonDeserializationContent.allCulturesDeserialized = value;
         }
 
         public static YoutubeAccount YoutubeAccountForNullReplacement
@@ -148,8 +160,16 @@ namespace Drexel.VidUp.Json.Content
                 reSerialize.YoutubeAccountList = true;
             }
 
+            if (!JsonDeserializationContent.allCategoriesDeserialized || !JsonDeserializationContent.allCulturesDeserialized)
+            {
+                Tracer.Write($"JsonDeserializationContent.Deserialize: At least one category or culture on all uploads deserialization was unknown and replaced with null.");
+                reSerialize.AllUploads = true;
+            }
+
             JsonDeserializationContent.allPlaylistsDeserialiozed = true;
             JsonDeserializationContent.allYoutubeAccountsDeserialiozed = true;
+            JsonDeserializationContent.allCategoriesDeserialized = true;
+            JsonDeserializationContent.allCulturesDeserialized = true;
             reSerialize.TemplateList = this.deserializeTemplateList();
             if (!JsonDeserializationContent.allPlaylistsDeserialiozed)
             {
@@ -164,9 +184,17 @@ namespace Drexel.VidUp.Json.Content
                 reSerialize.YoutubeAccountList = true;
             }
 
+            if (!JsonDeserializationContent.allCategoriesDeserialized || !JsonDeserializationContent.allCulturesDeserialized)
+            {
+                Tracer.Write($"JsonDeserializationContent.Deserialize: At least one category or culture on template list deserialization was unknown and replaced with null.");
+                reSerialize.TemplateList = true;
+            }
+
             if (!this.setTemplateOnUploads())
             {
-                reSerialize.TemplateList = true;
+                //the uploads file holds the broken reference, so uploads must be
+                //rewritten, not the template list (BUG-21).
+                reSerialize.AllUploads = true;
             }
 
             this.deserializeUploadListGuids();
@@ -300,6 +328,14 @@ namespace Drexel.VidUp.Json.Content
             //templates are set on setTemplateOnUploads by reading json again.
             serializer.Converters.Add(new TemplateNullConverter());
             serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
+            //a broken value in one record (e.g. a malformed guid) must not fail
+            //the whole file (BUG-21): log it and let deserialization continue
+            //with the remaining records.
+            serializer.Error += (sender, args) =>
+            {
+                Tracer.Write($"JsonDeserializationContent.deserializeAllUploads: Error in uploads storage file, skipping broken value: {args.ErrorContext.Error.Message}");
+                args.ErrorContext.Handled = true;
+            };
 
             try
             {
@@ -316,6 +352,17 @@ namespace Drexel.VidUp.Json.Content
                 //list and leave the broken file untouched on disk.
                 Tracer.Write($"JsonDeserializationContent.deserializeAllUploads: uploads storage file could not be deserialized ({ex.GetType().Name}: {ex.Message}), continuing with empty uploads list.");
                 JsonDeserializationContent.AllUploads = new List<Upload>();
+            }
+
+            if (JsonDeserializationContent.AllUploads != null)
+            {
+                //records whose guid could not be parsed keep an empty guid (their
+                //conversion error was handled above); drop them (BUG-21).
+                int removedCount = JsonDeserializationContent.AllUploads.RemoveAll(upload => upload == null || upload.Guid == Guid.Empty);
+                if (removedCount > 0)
+                {
+                    Tracer.Write($"JsonDeserializationContent.deserializeAllUploads: Removed {removedCount} upload(s) with missing or malformed guid.");
+                }
             }
 
             Tracer.Write($"JsonDeserializationContent.deserializeAllUploads: End.");
@@ -337,6 +384,11 @@ namespace Drexel.VidUp.Json.Content
             serializer.Converters.Add(new CategoryIdConverter());
             serializer.Converters.Add(new CultureInfoCultureStringConverter());
             serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
+            serializer.Error += (sender, args) =>
+            {
+                Tracer.Write($"JsonDeserializationContent.deserializeTemplateList: Error in template list storage file, skipping broken value: {args.ErrorContext.Error.Message}");
+                args.ErrorContext.Handled = true;
+            };
 
             using (StreamReader sr = new StreamReader(this.getReadFilePath(this.templateListFilePath)))
             using (JsonReader reader = new JsonTextReader(sr))
@@ -395,11 +447,16 @@ namespace Drexel.VidUp.Json.Content
                 {
                     foreach (JToken jUpload in jUploads)
                     {
-                        string uploadGuid = jUpload["guid"].Value<string>();
-                        string templateGuid = jUpload["template"].Value<string>();
-                        if (!String.IsNullOrWhiteSpace(templateGuid))
+                        //skip records with missing or malformed guids instead of
+                        //failing the whole deserialization (BUG-21); such records
+                        //are already dropped or repaired elsewhere.
+                        string uploadGuid = jUpload["guid"]?.Value<string>();
+                        string templateGuid = jUpload["template"]?.Value<string>();
+                        if (!String.IsNullOrWhiteSpace(templateGuid)
+                            && Guid.TryParse(uploadGuid, out Guid uploadGuidParsed)
+                            && Guid.TryParse(templateGuid, out Guid templateGuidParsed))
                         {
-                            uploadTemplateMap.Add(Guid.Parse(uploadGuid), Guid.Parse(templateGuid));
+                            uploadTemplateMap[uploadGuidParsed] = templateGuidParsed;
                         }
                     }
                 }
