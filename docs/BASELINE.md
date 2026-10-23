@@ -108,3 +108,16 @@ Linux VM 上に Wine 9.0（Ubuntu 24.04 パッケージ）+ Xvfb の環境を構
 残る実機確認事項:
 - [ ] 画面の見た目（MaterialDesignThemes 5.4.0 の表示）と対話操作
 - [ ] インストーラの実行（.NET 10 未導入機での判定・導入）とアンインストール
+
+## 8. Phase 3 実施結果（2026-10-23、アップロードまわり P0: BUG-03/05/06/15）
+
+変更（BUG 単位で4コミット）:
+- BUG-03: ThrottledBufferedStream の充填タスクを try/catch/finally 化。失敗時は例外を保持して必ず CompleteAdding し、消費側は保持例外を IOException として送出（ハングさせない）。Dispose で CompleteAdding + バッファ Dispose を行い、待ち手を解放する。テスト用に Stream を受け取るコンストラクタを追加。
+- BUG-05: 再開照会の応答分類を ResumePositionEvaluator に切り出し。308 は Range から再開位置、200/201 は動画 ID を持つ完了として成功経路へ合流（データ再送なし）。全バイト到達時は不正な Content-Range を作らず、確定用の照会 PUT で ID を受け取る（計画の「PUT を送らず完了扱い」を ID 取得込みの形に調整）。照会用 StreamContent は using 化。
+- BUG-06（最小修正）: UploadStats.Update の WaitOne〜Set を try/finally 化し、currentUpload の null ガードを追加。Uploader.timerElapsed はスナップショット＋null 許容にした。本格置換は Phase 6（BUG-09 と同時）。
+- BUG-15: ストリームの差し替え・終了を setStream/clearStream に集約し、差し替え時は旧インスタンスを必ず Dispose、終了は finally で保証。フィールドは進捗表示の static アクセサのため static のまま、ライフサイクルの所有権のみ明示した。
+
+検証:
+- 新規テスト14件を追加（ストリーム5・応答分類8・統計イベント1）。Wine 上の全テスト実行で **61/61 合格**（従来47 + 新規14）。
+- 全7プロジェクト 0 エラー。警告数はベースラインと完全一致（UI 171 / Test 176 / Youtube 7 ほか）。
+- 実アカウントでのアップロード確認は未実施（分類ロジックはモック相当の単体テストで担保）。
