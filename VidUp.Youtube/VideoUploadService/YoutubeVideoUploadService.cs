@@ -95,9 +95,20 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
             try
             {
                 Tracer.Write($"YoutubeVideoUploadService.Upload: Initialize upload.");
-                if (!await YoutubeVideoUploadService.initializeUploadAsync(upload, resumableSessionUriSet, resetEvent).ConfigureAwait(false))
+                ResumeCheckResult resumeCheck = await YoutubeVideoUploadService.initializeUploadAsync(upload, resumableSessionUriSet, resetEvent).ConfigureAwait(false);
+                if (resumeCheck == ResumeCheckResult.Failed)
                 {
                     return UploadResult.FailedWithoutDataSent;
+                }
+
+                if (resumeCheck == ResumeCheckResult.Completed)
+                {
+                    //the server already received the whole file (BUG-05), finish without sending the data again
+                    Tracer.Write($"YoutubeVideoUploadService.Upload: End, upload was already completed on the server, video id {upload.VideoId}.");
+                    resetEvent.WaitOne();
+                    upload.UploadStatus = UplStatus.Finished;
+                    JsonSerializationContent.JsonSerializer.SerializeAllUploads();
+                    return UploadResult.Finished;
                 }
 
                 long initialUploadBytesSent = upload.BytesSent;
@@ -139,10 +150,23 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                             await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
                             Tracer.Write($"YoutubeVideoUploadService.Upload: Getting range due to upload retry.");
-                            if(!await YoutubeVideoUploadService.getResumePositionAsync(upload, resetEvent).ConfigureAwait(false))
+                            ResumeCheckResult retryCheck = await YoutubeVideoUploadService.getResumePositionAsync(upload, resetEvent).ConfigureAwait(false);
+                            if (retryCheck == ResumeCheckResult.Failed)
                             {
                                 YoutubeVideoUploadService.stream = null;
                                 return YoutubeVideoUploadService.getResult(upload.BytesSent, initialUploadBytesSent, false);
+                            }
+
+                            if (retryCheck == ResumeCheckResult.Completed)
+                            {
+                                //the server already received the whole file (BUG-05), finish without sending the data again
+                                Tracer.Write($"YoutubeVideoUploadService.Upload: End, upload was already completed on the server, video id {upload.VideoId}.");
+                                resetEvent.WaitOne();
+                                upload.UploadStatus = UplStatus.Finished;
+
+                                YoutubeVideoUploadService.stream?.Dispose();
+                                YoutubeVideoUploadService.stream = null;
+                                return UploadResult.Finished;
                             }
 
                             //HttpClient disposed inputStream...
@@ -162,7 +186,12 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                         Tracer.Write($"YoutubeVideoUploadService.Upload: Upload try: resume position {upload.BytesSent.ToString("N0")} Try {uploadTry}.");
                         Tracer.Write($"YoutubeVideoUploadService.Upload: Creating content.");
 
-                        using (StreamContent streamContent = HttpHelper.GetStreamContentResumableUpload(YoutubeVideoUploadService.stream, YoutubeVideoUploadService.stream.Length, upload.BytesSent, MimeTypesMap.GetMimeType(upload.FilePath)))
+                        //when the server already has all bytes, a ranged PUT would produce an invalid
+                        //Content-Range (start after end), so only the finalizing status query is sent (BUG-05)
+                        bool finalizing = upload.BytesSent >= fileLength;
+                        using (StreamContent streamContent = finalizing
+                            ? HttpHelper.GetStreamContentContentRangeOnly(fileLength)
+                            : HttpHelper.GetStreamContentResumableUpload(YoutubeVideoUploadService.stream, YoutubeVideoUploadService.stream.Length, upload.BytesSent, MimeTypesMap.GetMimeType(upload.FilePath)))
                         {
                             try
                             {
@@ -188,12 +217,16 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                                         upload.VideoId = response.Id;
 
                                         //last stats update to reach 0 bytes and time left.
-                                        upload.BytesSent = YoutubeVideoUploadService.stream.Position;
+                                        if (!finalizing)
+                                        {
+                                            upload.BytesSent = YoutubeVideoUploadService.stream.Position;
+                                        }
+
                                         resetEvent.WaitOne();
                                         upload.UploadStatus = UplStatus.Finished;
                                         Tracer.Write($"YoutubeVideoUploadService.Upload: Upload finished with resume position {lastResumePositionBeforeError}, package size {YoutubeVideoUploadService.stream.ReadBuffer}, video id {upload.VideoId}.");
 
-                                        if (YoutubeVideoUploadService.stream.ReadBuffer != Settings.Instance.UserSettings.NetworkPackageSizeInBytes)
+                                        if (!finalizing && YoutubeVideoUploadService.stream.ReadBuffer != Settings.Instance.UserSettings.NetworkPackageSizeInBytes)
                                         {
                                             Tracer.Write($"YoutubeVideoUploadService.Upload: Real network package size different from configured package size, saving NetworkPackageSizeInBytes, before: {Settings.Instance.UserSettings.NetworkPackageSizeInBytes}, after: {YoutubeVideoUploadService.stream.ReadBuffer}.");
                                             //todo: maybe check/reset max upload after change
@@ -303,7 +336,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
             return UploadResult.FailedWithoutDataSent;
         }
 
-        private static async Task<bool> initializeUploadAsync(Upload upload, Action<Upload> resumableSessionUriSet, AutoResetEvent resetEvent)
+        private static async Task<ResumeCheckResult> initializeUploadAsync(Upload upload, Action<Upload> resumableSessionUriSet, AutoResetEvent resetEvent)
         {
             Tracer.Write($"YoutubeVideoUploadService.initializeUpload: Start.");
 
@@ -312,7 +345,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 Tracer.Write($"YoutubeVideoUploadService.initializeUploadAsync: Requesting new upload/new resumable session uri.");
                 if (!await YoutubeVideoUploadService.requestNewUploadAsync(upload, resetEvent).ConfigureAwait(false))
                 {
-                    return false;
+                    return ResumeCheckResult.Failed;
                 }
 
                 resumableSessionUriSet(upload);
@@ -321,17 +354,23 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
             {
                 Tracer.Write($"YoutubeVideoUploadService.initializeUploadAsync: Continue upload, getting range.");
 
-                if (!await YoutubeVideoUploadService.getResumePositionAsync(upload, resetEvent).ConfigureAwait(false))
+                ResumeCheckResult resumeCheck = await YoutubeVideoUploadService.getResumePositionAsync(upload, resetEvent).ConfigureAwait(false);
+                if (resumeCheck == ResumeCheckResult.Failed)
                 {
-                    return false;
+                    return ResumeCheckResult.Failed;
+                }
+
+                if (resumeCheck == ResumeCheckResult.Completed)
+                {
+                    return ResumeCheckResult.Completed;
                 }
             }
 
             Tracer.Write($"YoutubeVideoUploadService.initializeUpload: End.");
-            return true;
+            return ResumeCheckResult.Resume;
         }
 
-        private static async Task<bool> getResumePositionAsync(Upload upload, AutoResetEvent resetEvent)
+        private static async Task<ResumeCheckResult> getResumePositionAsync(Upload upload, AutoResetEvent resetEvent)
         {
             Tracer.Write($"YoutubeVideoUploadService.getResumePositionAsync: Start");
 
@@ -349,7 +388,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                         upload.AddStatusInformation(StatusInformationCreator.Create("ERR0022", $"Getting resume position failed 3 times. Errors: {errors.ToString()}."));
                         resetEvent.WaitOne();
                         upload.UploadStatus = UplStatus.Failed;
-                        return false;
+                        return ResumeCheckResult.Failed;
                     }
 
                     error = false;
@@ -361,46 +400,51 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 try
                 {
                     Tracer.Write($"YoutubeVideoUploadService.getResumePositionAsync: Requesting resume position, try {requestTry}.");
-                    StreamContent streamContent = HttpHelper.GetStreamContentContentRangeOnly(new FileInfo(upload.FilePath).Length);
+                    long fileLength = new FileInfo(upload.FilePath).Length;
+                    using (StreamContent streamContent = HttpHelper.GetStreamContentContentRangeOnly(fileLength))
                     using (HttpRequestMessage requestMessage = await HttpHelper.GetAuthenticatedRequestMessageAsync(
                         upload.YoutubeAccount, HttpMethod.Put, upload.ResumableSessionUri).ConfigureAwait(false))
                     {
                         requestMessage.Content = streamContent;
                         using (HttpResponseMessage responseMessage = await HttpHelper.StandardClient.SendAsync(requestMessage).ConfigureAwait(false))
+                        using (responseMessage.Content)
                         {
                             string content = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
-                            if (responseMessage.StatusCode != HttpStatusCode.PermanentRedirect)
+
+                            string range = null;
+                            IEnumerable<string> rangeValues;
+                            if (responseMessage.Headers.TryGetValues("Range", out rangeValues))
                             {
-                                throw new HttpStatusException(responseMessage.ReasonPhrase, (int)responseMessage.StatusCode, content);
+                                range = rangeValues.FirstOrDefault();
                             }
-                            else
+
+                            long bytesSent;
+                            string videoId;
+                            ResumeCheckResult resumeCheck = ResumePositionEvaluator.Evaluate(responseMessage.StatusCode, range, content, fileLength, out bytesSent, out videoId);
+                            if (resumeCheck == ResumeCheckResult.Completed)
+                            {
+                                //200/201: the server already received the whole file (BUG-05)
+                                Tracer.Write($"YoutubeVideoUploadService.getResumePositionAsync: Upload already completed on the server, video id {videoId}.");
+                                upload.BytesSent = bytesSent;
+                                upload.VideoId = videoId;
+                                return ResumeCheckResult.Completed;
+                            }
+
+                            if (resumeCheck == ResumeCheckResult.Resume)
                             {
                                 Tracer.Write($"YoutubeVideoUploadService.getResumePositionAsync: Read header.");
 
-                                try
+                                if (range == null)
                                 {
-                                    string range = responseMessage.Headers.GetValues("Range").First();
-                                    if (!string.IsNullOrWhiteSpace(range))
-                                    {
-                                        string[] parts = range.Split('-');
-                                        upload.BytesSent = Convert.ToInt64(parts[1]) + 1;
-                                    }
+                                    Tracer.Write($"YoutubeVideoUploadService.getResumePositionAsync: Range header not found, restarting upload.");
+                                    errors.AppendLine($"Youtube delivers no resume position information, restarting upload from beginning.");
                                 }
-                                catch (InvalidOperationException e)
-                                {
-                                    Tracer.Write($"YoutubeVideoUploadService.getResumePositionAsync: Range header not found, restarting upload, exception: {e.ToString()}.");
-                                    errors.AppendLine($"Youtube delivers no resume position information, restarting upload from beginning: {e.Message}.");
-                                    upload.BytesSent = 0;
-                                }
-                                catch (Exception e)
-                                {
-                                    Tracer.Write($"YoutubeVideoUploadService.getResumePositionAsync: Range header exception: {e.ToString()}.");
-                                    errors.AppendLine($"Could not get resume position information: {e.GetType().Name}: {e.Message}.");
 
-                                    error = true;
-                                    requestTry++;
-                                }
+                                upload.BytesSent = bytesSent;
+                                return ResumeCheckResult.Resume;
                             }
+
+                            throw new HttpStatusException(responseMessage.ReasonPhrase, (int)responseMessage.StatusCode, content);
                         }
                     }
                 }
@@ -430,7 +474,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                         resetEvent.WaitOne();
                         upload.UploadStatus = UplStatus.Failed;
                         Tracer.Write($"YoutubeVideoUploadService.requestNewUpload: End, quota exceeded.");
-                        return false;
+                        return ResumeCheckResult.Failed;
                     }
 
                     error = true;
@@ -447,7 +491,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
             }
             while (error);
 
-            return true;
+            return ResumeCheckResult.Resume;
         }
 
         private static async Task<bool> requestNewUploadAsync(Upload upload, AutoResetEvent resetEvent)
