@@ -134,3 +134,20 @@ Linux VM 上に Wine 9.0（Ubuntu 24.04 パッケージ）+ Xvfb の環境を構
 - 特性テストを先行作成し、修正前に各バグの失敗を確認（空組み合わせのスタックオーバーフローでテストホストが死ぬことも実測。そのケースは修正後のみ実行）。
 - 新規テスト22件（次回日時12・退化ケース5・コピー2・相対組み合わせ3）。Wine 上の全テスト実行で **83/83 合格**（従来61 + 新規22）。
 - 全7プロジェクト 0 エラー。警告数はベースラインと完全一致（Business 5 含む）。
+
+## 10. Phase 5 実施結果（2026-10-24、ライフサイクル/スレッド: BUG-02/08/18/19/14）
+
+変更（BUG 単位で5コミット）:
+- BUG-14: EventAggregator の購読解除クロージャがロック外（Publish のスナップショットコピーと競合しリスト破損しうる）だったのを eventRegisterLocker 内へ。Publish はハンドラごとに try/catch し、例外を Tracer に記録して残りの購読者への配信を継続するよう変更（従来は最初の例外で配信が止まり発行元へ伝播）。Subscription.Dispose は Interlocked.Exchange で冪等・スレッドセーフ化。既存の購読26か所を保持/破棄する移行は漸進対応とし、本コミットの範囲外。
+- BUG-02: PowerSavingHelper が SetThreadExecutionState の戻り値を見ていなかった（失敗時も「無効化済み」と扱った）ため、失敗を Tracer に記録（Win32 エラー併記）。本体は UploadRibbonViewModel.startUploadingAsync の省電力復帰が ConfigureAwait(false) 後のプールスレッドで実行され無効だった問題で、開始時に UI Dispatcher を捕捉し、finally でそのスレッドへマーシャリングして復帰させるよう修正（SetThreadExecutionState はスレッド単位）。あわせて全体を try/catch/finally 化し、例外時も uploader 破棄とステータス復帰が必ず行われるようにした（従来は例外でステータスが Uploading のまま固着し、async void 経由でクラッシュしうる）。
+- BUG-19: serializeandExecute の AutoResetEvent.WaitOne 取得後に例外が起きると Set されず、以降の自動化実行がすべて永久にブロックしていた問題を、取得後本体の try/finally で保証するよう修正（スロットル側 Task.Run も WaitOne 後の例外で再 Set）。全体を try/catch で包み Tracer に記録。ファイル名のみのパスで DirectoryInfo(...).Parent が null になるケースのフォールバック、自動化情報ファイル名への Guid サフィックス（ミリ秒衝突回避、清理グロブ automationinfo_uploadfinished_*.json には引き続き一致）、複数スレッドから触る finishedUploads のロック統一もあわせて実施。
+- BUG-18: PlaylistRibbonViewModel の自動設定 Timer が破棄されず、終了後も発火しうる問題。破棄フラグ + ロック付きの Change 集約メソッドを新設し、MainWindowViewModel.Close() から呼ぶ public Close() を追加。autoSetPlaylistsAsync 本体も try/finally 化し、例外時にガード autoSettingPlaylists が立ったまま以降の自動設定が止まる問題を解消。
+- BUG-08: MainWindowViewModel のファイル自動取込が「async void の無限ループ + 上限なし30秒リトライ」で、開けない／消えた先頭ファイルがあると後続ファイルが永久に処理されず、Close() でも何も止まらなかった問題。消費タスクを CancellationToken 付き async Task 化（多重起動ガード付き）、リトライは「存在確認 + 最大10回×30秒（約5分）」で打ち切り記録して次へ進むよう変更、AddFiles は UI Dispatcher 経由に統一、onFileCreated は CompleteAdding 後の Add をガード。Close() は Watcher 停止 → CompleteAdding → キャンセル → 消費タスクの終了待ち（10秒上限）→ CTS 破棄までを行うよう変更。
+
+検証:
+- 新規テスト6件（EventAggregator 5件: ハンドラ例外時も配信継続、購読解除後の不達、購読/発行/解除の並行ストレス等。PowerSavingHelper スモーク 1件）。BUG-19/18/08 は対象が private メソッドや画面用 ViewModel で単体テストの土台がないため、ビルドとコードレビューで検証（各コミットメッセージに明記）。
+- 全7プロジェクト 0 エラー。警告数はベースラインと完全一致（UI 171 / Test 176 含む）。
+- Wine 上の全テスト実行で **89/89 合格**（従来83 + 新規6）。
+
+環境メモ（検証時の障害）:
+- 2026-10-23 夜〜24 日未明に VM のランタイム再起動が3回発生し、そのたびに Wine が消去（OS-intent リプレイで約10分後に自動復旧）したほか、再起動後は `::ffff:127.0.0.1` 宛の経路が loopback でなくプロキシ fabric (host0) 経由になり、vstest↔testhost の通信が化けて discovery から進まなくなった。`sysctl -w net.ipv6.conf.all.disable_ipv6=1`（セル全体・再起動でリセット）で IPv4 フォールバックさせることで復旧し、最終的に 89/89 を確認した。詳細な運用手順は作業環境側の TOOLS.md に記録。
