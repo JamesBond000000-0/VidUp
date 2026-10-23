@@ -234,6 +234,37 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                                         }
                                   
                                         YoutubeVideoPostResponse response = JsonConvert.DeserializeObject<YoutubeVideoPostResponse>(content);
+                                        if (response == null || string.IsNullOrWhiteSpace(response.Id))
+                                        {
+                                            //a successful PUT without a readable video id
+                                            //leaves the session state unknown: the upload
+                                            //may already be complete on the server, so
+                                            //resolve it with a resume check instead of
+                                            //treating it as a send failure and putting
+                                            //the data again (BUG-17)
+                                            Tracer.Write($"YoutubeVideoUploadService.Upload: Upload response without a video id, checking the session state.");
+                                            ResumeCheckResult stateCheck = await YoutubeVideoUploadService.getResumePositionAsync(upload, resetEvent).ConfigureAwait(false);
+                                            if (stateCheck == ResumeCheckResult.Completed)
+                                            {
+                                                resetEvent.WaitOne();
+                                                upload.UploadStatus = UplStatus.Finished;
+
+                                                YoutubeVideoUploadService.clearStream();
+                                                return UploadResult.Finished;
+                                            }
+
+                                            if (stateCheck == ResumeCheckResult.Failed)
+                                            {
+                                                YoutubeVideoUploadService.clearStream();
+                                                return YoutubeVideoUploadService.getResult(upload.BytesSent, initialUploadBytesSent, false);
+                                            }
+
+                                            upload.AddStatusInformation(StatusInformationCreator.Create("ERR0027", $"Upload response contained no video id, resume position {upload.BytesSent.ToString("N0")} try {uploadTry}."));
+                                            error = true;
+                                            uploadTry++;
+                                            continue;
+                                        }
+
                                         upload.VideoId = response.Id;
 
                                         //last stats update to reach 0 bytes and time left.

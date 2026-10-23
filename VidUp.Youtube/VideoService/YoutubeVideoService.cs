@@ -48,7 +48,10 @@ namespace Drexel.VidUp.Youtube.VideoService
 
                                 YoutubeVideosGetResponse response = JsonConvert.DeserializeObject<YoutubeVideosGetResponse>(content);
 
-                                foreach (YoutubeVideosGetResponseVideo item in response.Items)
+                                //the response or its items can still be null (empty
+                                //result sets, explicit nulls), guard before
+                                //dereferencing (BUG-17)
+                                foreach (YoutubeVideosGetResponseVideo item in response?.Items ?? System.Array.Empty<YoutubeVideosGetResponseVideo>())
                                 {
                                     result.IsPublicByVideoId.Add(item.Id, item.Status.PrivacyStatus == "public");
                                 }

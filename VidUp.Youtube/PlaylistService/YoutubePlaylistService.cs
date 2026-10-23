@@ -76,7 +76,9 @@ namespace Drexel.VidUp.Youtube.PlaylistService
 
                             YoutubePlaylistsGetResponse response = JsonConvert.DeserializeObject<YoutubePlaylistsGetResponse>(content);
 
-                            if (response.Items.Length > 0)
+                            //the response or its items can still be null (empty result
+                            //sets, explicit nulls), guard before dereferencing (BUG-17)
+                            if (response?.Items != null && response.Items.Length > 0)
                             {
                                 foreach (YoutubePlaylistsGetResponsePlaylist item in response.Items)
                                 {
@@ -84,7 +86,7 @@ namespace Drexel.VidUp.Youtube.PlaylistService
                                 }
                             }
 
-                            if (!string.IsNullOrWhiteSpace(response.NextPageToken))
+                            if (response != null && !string.IsNullOrWhiteSpace(response.NextPageToken))
                             {
                                 StatusInformation statusInformation = await YoutubePlaylistService.addPlaylistsToResultAsync(response.NextPageToken, result, youtubeAccount).ConfigureAwait(false);
                                 if (statusInformation != null)
