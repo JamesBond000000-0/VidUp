@@ -524,17 +524,32 @@ namespace Drexel.VidUp.Json.Content
             Tracer.Write($"JsonDeserializationContent.checkUploadTemplateEqualsContainingTemplate: Start.");
 
             bool result = true;
+            //collect the mismatched (template, upload) pairs first (BUG-04): correcting
+            //during enumeration of template.Uploads invalidates the enumerator, because
+            //both the Template setter and RemoveUpload modify that list.
+            List<KeyValuePair<Template, Upload>> mismatchedUploads = new List<KeyValuePair<Template, Upload>>();
             foreach (Template template in DeserializationRepositoryContent.TemplateList)
             {
                 foreach (Upload upload in template.Uploads)
                 {
                     if (upload.Template != template)
                     {
-                        upload.Template = null;
-                        template.RemoveUpload(upload);
+                        mismatchedUploads.Add(new KeyValuePair<Template, Upload>(template, upload));
                         result = false;
                     }
                 }
+            }
+
+            foreach (KeyValuePair<Template, Upload> mismatchedUpload in mismatchedUploads)
+            {
+                //remove the upload from the containing template's list only. The
+                //upload's Template property is authoritative (it mirrors the json
+                //template field) and may legitimately point to another template
+                //whose list does contain the upload. The previous code additionally
+                //set upload.Template = null, whose setter removed the upload from
+                //that other template's list and left it in this list with a null
+                //template, so the mismatch reappeared on every startup.
+                mismatchedUpload.Key.RemoveUpload(mismatchedUpload.Value);
             }
 
             Tracer.Write($"JsonDeserializationContent.checkUploadTemplateEqualsContainingTemplate: End.");
