@@ -1453,12 +1453,15 @@ namespace Drexel.VidUp.Business
         {
             int weekIndex = Schedule.weeklyGetWeekIndex(this.startDate, dateTime);
             int remainder = weekIndex % this.weeklyWeekFrequency;
-            if (remainder > 0)
+            bool weekAdvanced = remainder > 0;
+            if (weekAdvanced)
             {
                 weekIndex = weekIndex + (this.weeklyWeekFrequency - remainder);
             }
 
-            int dayIndex = Schedule.GetCorrectedDayIndex(dateTime.DayOfWeek);
+            //when the search was advanced into the next scheduled week, it starts at
+            //the beginning of that week, otherwise its earlier days are skipped (BUG-07)
+            int dayIndex = weekAdvanced ? 0 : Schedule.GetCorrectedDayIndex(dateTime.DayOfWeek);
 
             for (int index = dayIndex; index <= 6; index++)
             {
@@ -1482,25 +1485,31 @@ namespace Drexel.VidUp.Business
             bool corrected = false;
             int monthIndex = Schedule.monthlyGetMonthIndex(this.startDate, dateTime);
             int remainder = monthIndex % this.monthlyMonthFrequency;
-            if (remainder > 0)
+            bool monthAdvanced = remainder > 0;
+            if (monthAdvanced)
             {
                 monthIndex = monthIndex + (this.monthlyMonthFrequency - remainder);
             }
 
+            //the month actually searched (and used for the end of month correction) is the
+            //target month, and when the search was advanced into it, the day search starts
+            //at its beginning, otherwise its earlier days are skipped (BUG-07)
+            DateTime targetMonth = Schedule.monthlyGetBeginningOfMonth(this.startDate).AddMonths(monthIndex);
+            int maxDays = DateTime.DaysInMonth(targetMonth.Year, targetMonth.Month);
+
             int originalDayIndex;
-            for (int index = dateTime.Day - 1; index < 31; index++)
+            for (int index = monthAdvanced ? 0 : dateTime.Day - 1; index < 31; index++)
             {
                 originalDayIndex = index;
                 if (this.monthlyMonthDateBasedDates[index])
                 {
-                    int maxDays = DateTime.DaysInMonth(dateTime.Year, dateTime.Month);
                     if (index + 1 > maxDays)
                     {
                         corrected = true;
                         index = maxDays - 1;
                     }
 
-                    nextDate = Schedule.monthlyGetBeginningOfMonth(this.startDate).AddMonths(monthIndex).AddDays(index);
+                    nextDate = targetMonth.AddDays(index);
                     originalDay = originalDayIndex + 1;
                     return corrected;
                 }
