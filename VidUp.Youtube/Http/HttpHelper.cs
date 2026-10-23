@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -17,7 +18,12 @@ namespace Drexel.VidUp.Youtube.Http
         private static HttpClient standardClient;
         private static HttpClient uploadClient;
 
-        private static Dictionary<YoutubeAccount, AccessToken> youtubeAccessTokenExpiryByAccount = new Dictionary<YoutubeAccount, AccessToken>();
+        //accessed from parallel flows (upload, playlist retrieval, settings), so the
+        //storage is concurrent and the check-and-fetch in ensureAccessTokenAsync is
+        //serialized with a semaphore (BUG-16: the plain Dictionary raced between
+        //check and store and could corrupt or throw KeyNotFoundException)
+        private static ConcurrentDictionary<YoutubeAccount, AccessToken> youtubeAccessTokenExpiryByAccount = new ConcurrentDictionary<YoutubeAccount, AccessToken>();
+        private static SemaphoreSlim accessTokenSemaphore = new SemaphoreSlim(1, 1);
         private static TimeSpan oneMinute = new TimeSpan(0, 1, 0);
 
         //buffer is set to constant value like 1024, 4096, 16384 etc.
@@ -52,16 +58,17 @@ namespace Drexel.VidUp.Youtube.Http
         {
             if (youtubeAccount != null)
             {
-                HttpHelper.youtubeAccessTokenExpiryByAccount.Remove(youtubeAccount);
+                AccessToken removedToken;
+                HttpHelper.youtubeAccessTokenExpiryByAccount.TryRemove(youtubeAccount, out removedToken);
             }
         }
 
         public static async Task<HttpRequestMessage> GetAuthenticatedRequestMessageAsync(YoutubeAccount youtubeAccount, HttpMethod method, string uri)
         {
             Tracer.Write($"HttpHelper.GetAuthenticatedRequestMessageAsync: Start with uri.");
-            await HttpHelper.ensureAccessTokenAsync(youtubeAccount).ConfigureAwait(false);
+            AccessToken accessToken = await HttpHelper.ensureAccessTokenAsync(youtubeAccount).ConfigureAwait(false);
             HttpRequestMessage message = new HttpRequestMessage(method, uri);
-            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", HttpHelper.youtubeAccessTokenExpiryByAccount[youtubeAccount].Token);
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
             Tracer.Write($"HttpHelper.GetAuthenticatedRequestMessageAsync: End with uri.");
             return message;
         }
@@ -69,25 +76,39 @@ namespace Drexel.VidUp.Youtube.Http
         public static async Task<HttpRequestMessage> GetAuthenticatedRequestMessageAsync(YoutubeAccount youtubeAccount, HttpMethod method)
         {
             Tracer.Write($"HttpHelper.GetAuthenticatedRequestMessageAsync: Start.");
-            await HttpHelper.ensureAccessTokenAsync(youtubeAccount).ConfigureAwait(false);
+            AccessToken accessToken = await HttpHelper.ensureAccessTokenAsync(youtubeAccount).ConfigureAwait(false);
             HttpRequestMessage message = new HttpRequestMessage();
             message.Method = method;
-            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", HttpHelper.youtubeAccessTokenExpiryByAccount[youtubeAccount].Token);
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
             Tracer.Write($"HttpHelper.GetAuthenticatedRequestMessageAsync: End.");
             return message;
         }
 
-        private static async Task ensureAccessTokenAsync(YoutubeAccount youtubeAccount)
+        //Returns a valid access token for the account, fetching and caching a new
+        //one when the cached token is missing or about to expire. The check, the
+        //fetch and the store run serialized, so parallel callers neither fetch
+        //twice nor observe a half-updated cache (BUG-16).
+        private static async Task<AccessToken> ensureAccessTokenAsync(YoutubeAccount youtubeAccount)
         {
             Tracer.Write($"HttpHelper.ensureAccessTokenAsync: Start, checking for access token.");
-            if (!HttpHelper.youtubeAccessTokenExpiryByAccount.ContainsKey(youtubeAccount) || HttpHelper.youtubeAccessTokenExpiryByAccount[youtubeAccount].Expiry - DateTime.Now < oneMinute)
+            await HttpHelper.accessTokenSemaphore.WaitAsync().ConfigureAwait(false);
+            try
             {
-                Tracer.Write($"HttpHelper.ensureAccessTokenAsync: No access token found, requesting access token.");
-                AccessToken token = await YoutubeAuthentication.GetNewAccessTokenAsync(youtubeAccount).ConfigureAwait(false);
-                HttpHelper.youtubeAccessTokenExpiryByAccount[youtubeAccount] = token;
-            }
+                AccessToken accessToken;
+                if (!HttpHelper.youtubeAccessTokenExpiryByAccount.TryGetValue(youtubeAccount, out accessToken) || accessToken.Expiry - DateTime.Now < oneMinute)
+                {
+                    Tracer.Write($"HttpHelper.ensureAccessTokenAsync: No access token found, requesting access token.");
+                    accessToken = await YoutubeAuthentication.GetNewAccessTokenAsync(youtubeAccount).ConfigureAwait(false);
+                    HttpHelper.youtubeAccessTokenExpiryByAccount[youtubeAccount] = accessToken;
+                }
 
-            Tracer.Write($"HttpHelper.ensureAccessTokenAsync: End.");
+                Tracer.Write($"HttpHelper.ensureAccessTokenAsync: End.");
+                return accessToken;
+            }
+            finally
+            {
+                HttpHelper.accessTokenSemaphore.Release();
+            }
         }
 
         public static StreamContent GetStreamContentContentRangeOnly(long length)
