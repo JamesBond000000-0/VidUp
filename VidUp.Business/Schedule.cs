@@ -294,6 +294,11 @@ namespace Drexel.VidUp.Business
             this.scheduleFrequency = schedule.ScheduleFrequency;
             this.startDate = schedule.StartDate;
 
+            //the schedule progress must survive a copy as well, otherwise duplicated
+            //templates re-propose slots which are already uploaded (BUG-11)
+            this.uploadedUntil = schedule.UploadedUntil;
+            this.ignoreUploadsBefore = schedule.IgnoreUploadsBefore;
+
             this.specificDateDateTime = schedule.specificDateDateTime;
 
             this.dailyDayFrequency = schedule.DailyDayFrequency;
