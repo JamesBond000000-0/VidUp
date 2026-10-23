@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "0f179547-8981-4509-b167-b84d1fdbc2e6",
+    "created": "2020-08-12T08:49:11.5899076+02:00",
+    "lastModified": "2020-08-12T08:49:11.5899076+02:00",
+    "uploadStart": "0001-01-01T00:00:00",
+    "uploadEnd": "0001-01-01T00:00:00",
+    "filePath": "{BaseDir}\\T2Root\\videos\\video2.mkv",
+    "thumbnailFilePath": null,
+    "playlist": null,
+    "template": null,
+    "uploadStatus":
