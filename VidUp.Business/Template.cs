@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.Serialization;
 using Newtonsoft.Json;
 
 namespace Drexel.VidUp.Business
@@ -376,6 +377,23 @@ namespace Drexel.VidUp.Business
         [JsonConstructor]
         private Template()
         {
+        }
+
+        [OnDeserialized]
+        private void onDeserialized(StreamingContext context)
+        {
+            //the JsonConstructor above is empty and explicit nulls in the json
+            //overwrite field initializers (BUG-23); restore the empty defaults
+            //so Uploads/Tags cannot be null after deserialization.
+            if (this.uploads == null)
+            {
+                this.uploads = new List<Upload>();
+            }
+
+            if (this.tags == null)
+            {
+                this.tags = new List<string>();
+            }
         }
 
         //for fake templates(e.g. All and None Templates for filter)

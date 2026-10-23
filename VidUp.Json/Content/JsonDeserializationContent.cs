@@ -333,6 +333,14 @@ namespace Drexel.VidUp.Json.Content
             //with the remaining records.
             serializer.Error += (sender, args) =>
             {
+                if (args.ErrorContext.Error is JsonReaderException
+                    || args.ErrorContext.Error.Message.StartsWith("Unexpected end"))
+                {
+                    //structurally broken file (e.g. truncated): do not salvage
+                    //partial records; the caller falls back to an empty list.
+                    return;
+                }
+
                 Tracer.Write($"JsonDeserializationContent.deserializeAllUploads: Error in uploads storage file, skipping broken value: {args.ErrorContext.Error.Message}");
                 args.ErrorContext.Handled = true;
             };
@@ -386,21 +394,54 @@ namespace Drexel.VidUp.Json.Content
             serializer.Converters.Add(new YoutubeAccountGuidStringConverter());
             serializer.Error += (sender, args) =>
             {
+                if (args.ErrorContext.Error is JsonReaderException
+                    || args.ErrorContext.Error.Message.StartsWith("Unexpected end"))
+                {
+                    return;
+                }
+
                 Tracer.Write($"JsonDeserializationContent.deserializeTemplateList: Error in template list storage file, skipping broken value: {args.ErrorContext.Error.Message}");
                 args.ErrorContext.Handled = true;
             };
 
+            //read the "templates" property of the root object explicitly instead of
+            //the previous fixed "read 3 tokens and deserialize the rest" approach
+            //(BUG-23): that broke whenever the file structure differed, e.g. for
+            //"templates": null, which is now treated as an empty template list.
+            //Deserializing the property value directly also still avoids creating a
+            //TemplateList, whose constructor would add event listeners etc.
+            JToken templatesToken = null;
             using (StreamReader sr = new StreamReader(this.getReadFilePath(this.templateListFilePath)))
             using (JsonReader reader = new JsonTextReader(sr))
             {
-                //set reader to templateList to avoid creation of TemplateList which will cause addition of event listeners etc. in constructor
-                reader.Read();
-                reader.Read();
-                reader.Read();
-                this.templates = serializer.Deserialize<List<Template>>(reader);
+                JToken rootToken = JToken.Load(reader);
+                if (rootToken.Type == JTokenType.Object)
+                {
+                    templatesToken = rootToken["templates"];
+                }
+                else if (rootToken.Type == JTokenType.Array)
+                {
+                    templatesToken = rootToken;
+                }
             }
 
-            foreach (Template template in this.templates) 
+            if (templatesToken == null || templatesToken.Type == JTokenType.Null)
+            {
+                this.templates = new List<Template>();
+            }
+            else
+            {
+                this.templates = templatesToken.ToObject<List<Template>>(serializer) ?? new List<Template>();
+            }
+
+            int removedCount = this.templates.RemoveAll(template => template == null || template.Guid == Guid.Empty);
+            if (removedCount > 0)
+            {
+                Tracer.Write($"JsonDeserializationContent.deserializeTemplateList: Removed {removedCount} template(s) with missing or malformed guid.");
+                reserialize = true;
+            }
+
+            foreach (Template template in this.templates)
             {
                 if (template.Uploads.Contains(null))
                 {

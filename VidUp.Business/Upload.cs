@@ -523,6 +523,19 @@ namespace Drexel.VidUp.Business
             {
                 this.uploadStatus = UplStatus.Stopped;
             }
+
+            //explicit nulls in the json overwrite the constructor initialization
+            //(BUG-23); restore the empty defaults so later .Clear()/.AsReadOnly()
+            //calls cannot run into a NullReferenceException.
+            if (this.tags == null)
+            {
+                this.tags = new List<string>();
+            }
+
+            if (this.statusInformation == null)
+            {
+                this.statusInformation = new List<StatusInformation>();
+            }
         }
 
         public void SetTags(IEnumerable<string> tags)
