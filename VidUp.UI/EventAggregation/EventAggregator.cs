@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using Drexel.VidUp.Utils;
 
 namespace Drexel.VidUp.UI.EventAggregation
 {
@@ -41,12 +42,19 @@ namespace Drexel.VidUp.UI.EventAggregation
                 lock (eventRegisterLocker)
                 {
                     this.eventRegister.Add((typeof(T), action));
-                    return new Subscription(() =>
+                }
+
+                return new Subscription(() =>
+                    {
+                        //the removal must take the same lock as Subscribe and the
+                        //snapshot creation in Publish, otherwise the register can be
+                        //corrupted by concurrent modification (BUG-14)
+                        lock (this.eventRegisterLocker)
                         {
                             this.eventRegister.Remove((typeof(T), action));
                         }
-                    );
-                }
+                    }
+                );
             }
 
             return null;
@@ -63,7 +71,16 @@ namespace Drexel.VidUp.UI.EventAggregation
             {
                 if (tEvent.eventType == typeof(T))
                 {
-                    ((Action<T>)tEvent.method)(data);
+                    try
+                    {
+                        ((Action<T>)tEvent.method)(data);
+                    }
+                    catch (Exception e)
+                    {
+                        //one failing handler must not stop the delivery to the
+                        //remaining handlers nor propagate to the publisher (BUG-14)
+                        Tracer.Write($"EventAggregator.Publish: A handler for {typeof(T).Name} threw an exception: {e.ToString()}");
+                    }
                 }
             }
         }

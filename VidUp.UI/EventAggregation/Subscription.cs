@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 
 namespace Drexel.VidUp.UI.EventAggregation
 {
@@ -12,10 +13,8 @@ namespace Drexel.VidUp.UI.EventAggregation
         }
         public void Dispose()
         {
-            if (this.remove != null)
-            {
-                this.remove();
-            }
+            //idempotent and thread safe: only the first Dispose unregisters (BUG-14)
+            Interlocked.Exchange(ref this.remove, null)?.Invoke();
         }
     }
 }
