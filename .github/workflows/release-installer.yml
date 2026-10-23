@@ -1,0 +1,78 @@
+name: Release Installer
+
+# Builds the VidUp installer (Inno Setup) on a Windows runner and publishes
+# it as a GitHub Release asset.
+#
+# Why not VidUp.Setup.exe? That helper ends with Console.ReadKey() and is
+# meant for interactive local use. This workflow replicates its steps:
+# build VidUp.UI (Release) -> read version from VidUp.dll -> run the bundled
+# Inno Setup compiler (VidUp.Setup/InnoBin/ISCC.exe) with the same defines
+# the helper passes (/DCONFIG, /DVERSION, /DSOURCEPATH).
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Create a GitHub Release with the installer"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build VidUp.UI (Release)
+        run: dotnet build VidUp.UI/VidUp.UI.csproj -c Release --nologo
+
+      - name: Build installer (bundled Inno Setup)
+        shell: pwsh
+        run: |
+          $srcDir = (Resolve-Path "VidUp.UI/bin/Release/x64/net10.0-windows7.0").Path + "\"
+          $ver = [System.Reflection.AssemblyName]::GetAssemblyName((Join-Path $srcDir "VidUp.dll")).Version.ToString()
+          $ver = $ver.Remove($ver.Length - 2)
+          Write-Host "VidUp version: $ver"
+          "VIDUP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          & "VidUp.Setup/InnoBin/ISCC.exe" "VidUp.Setup/setup.iss" "/DCONFIG=Release" "/DVERSION=$ver" "/DSOURCEPATH=$srcDir"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          Get-ChildItem "VidUp.Setup/bin/Release/x64/" | Format-Table Name, Length
+
+      - name: Upload installer as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VidUp-Setup-${{ env.VIDUP_VERSION }}
+          path: VidUp.Setup/bin/Release/x64/*.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ github.event_name == 'push' || inputs.publish_release }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            $tag = $env:GITHUB_REF_NAME
+          } else {
+            $tag = "v$env:VIDUP_VERSION-fork.${{ github.run_number }}"
+          }
+          $file = Get-ChildItem "VidUp.Setup/bin/Release/x64/*.exe" | Select-Object -First 1
+          $ghArgs = @("release", "create", $tag, $file.FullName,
+                      "--title", "VidUp $tag",
+                      "--notes", "VidUp installer built by GitHub Actions (.NET 10). Requires the .NET 10 Desktop Runtime.",
+                      "--target", $env:GITHUB_SHA)
+          if ($tag.Contains("-")) { $ghArgs += "--prerelease" }
+          gh @ghArgs
+          Write-Host "Release created: $tag with $($file.Name)"
