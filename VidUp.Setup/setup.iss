@@ -32,18 +32,18 @@ begin
   Result := UninstallString;
 end;
 
-function IsNet8Installed(): Boolean;
+function IsNet10Installed(): Boolean;
 var
   FindRec: TFindRec;
-  Net6FirstChar: String;
+  Net10FirstChars: String;
 begin
   if FindFirst(ExpandConstant('{commonpf}\dotnet\shared\Microsoft.WindowsDesktop.App\*'), FindRec) then begin
     try
       repeat
         if FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then
         begin
-          Net6FirstChar := Copy(FindRec.Name, 1, 1)
-          if Net6FirstChar = '8' then
+          Net10FirstChars := Copy(FindRec.Name, 1, 2)
+          if Net10FirstChars = '10' then
           begin
             Result:= true;
           end;
@@ -185,9 +185,9 @@ end;
 function InitializeSetup(): Boolean;
 begin
     Result := true;
-    if not IsNet8Installed() then
+    if not IsNet10Installed() then
     begin
-        MsgBox('.NET 8 ist required to run this app, please download .NET Desktop Runtime from https://dotnet.microsoft.com/en-us/download/dotnet/8.0 and install it.', mbInformation, MB_OK);
+        MsgBox('.NET 10 ist required to run this app, please download .NET Desktop Runtime from https://dotnet.microsoft.com/en-us/download/dotnet/10.0 and install it.', mbInformation, MB_OK);
         Result := false;
     end;
 end;

@@ -40,7 +40,7 @@ namespace Drexel.VidUp.Setup
                     throw new ApplicationException("Only x64 setup is supported.");
                 }
 
-                innoIn = Path.GetFullPath($"{AppDomain.CurrentDomain.BaseDirectory}..\\..\\..\\..\\VidUp.UI\\bin\\{config}\\x64\\net6.0-windows\\");
+                innoIn = Path.GetFullPath($"{AppDomain.CurrentDomain.BaseDirectory}..\\..\\..\\..\\VidUp.UI\\bin\\{config}\\x64\\net10.0-windows7.0\\");
 
                 if (obfuscate)
                 {
@@ -50,7 +50,7 @@ namespace Drexel.VidUp.Setup
                     }
 
                     dotfuscatorOut = Path.GetFullPath($"{AppDomain.CurrentDomain.BaseDirectory}..\\..\\..\\..\\VidUp.UI\\bin\\dotfuscated\\{config}\\x64\\");
-                    innoIn = Path.GetFullPath($"{AppDomain.CurrentDomain.BaseDirectory}..\\..\\..\\..\\VidUp.UI\\bin\\dotfuscated\\{config}\\x64\\net6.0-windows\\");
+                    innoIn = Path.GetFullPath($"{AppDomain.CurrentDomain.BaseDirectory}..\\..\\..\\..\\VidUp.UI\\bin\\dotfuscated\\{config}\\x64\\net10.0-windows7.0\\");
 
                     if (Directory.Exists(innoIn))
                     {
