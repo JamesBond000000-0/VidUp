@@ -31,6 +31,7 @@ namespace Drexel.VidUp.UI.ViewModels
         private GenericCommand parameterlessCommand;
 
         private bool autoSettingPlaylists;
+        private bool autoSetPlaylistTimerDisposed;
         private int intervalInSeconds = 12 * 60 * 60;
 
         private readonly object autoSetPlaylistsLock = new object();
@@ -290,6 +291,12 @@ namespace Drexel.VidUp.UI.ViewModels
             Tracer.Write($"PlaylistRibbonViewModel.autoSetPlaylists: Start.");
             lock (this.autoSetPlaylistsLock)
             {
+                if (this.autoSetPlaylistTimerDisposed)
+                {
+                    Tracer.Write($"PlaylistRibbonViewModel.autoSetPlaylists: End, view model is closed.");
+                    return;
+                }
+
                 if (this.autoSettingPlaylists)
                 {
                     Tracer.Write($"PlaylistRibbonViewModel.autoSetPlaylists: End, utosetting playlists currently in progress.");
@@ -297,11 +304,13 @@ namespace Drexel.VidUp.UI.ViewModels
                 }
 
                 this.autoSettingPlaylists = true;
-                this.autoSetPlaylistTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                this.changeAutoSetPlaylistTimer(Timeout.Infinite);
                 EventAggregator.Instance.Publish(new AutoSettingPlaylistsStateChangedMessage(true, "Auto setting playlists is running..."));
                 this.raisePropertyChanged("AutoSettingPlaylists");
             }
 
+            try
+            {
             bool success = true;
             List<StatusInformation> messages = new List<StatusInformation>();
             messages.Add(StatusInformationCreator.Create("INF0002", $"Starting autosetting playlists."));
@@ -523,7 +532,7 @@ namespace Drexel.VidUp.UI.ViewModels
                 //first call after constructor the timer can be less than interval.
                 int nextAutoSetPlaylistsInMilliSconds = this.intervalInSeconds * 1000;
                 messages.Add(StatusInformationCreator.Create("INF0018", $"Next auto set playlists: {DateTime.Now.AddMilliseconds(nextAutoSetPlaylistsInMilliSconds)}."));
-                this.autoSetPlaylistTimer.Change(nextAutoSetPlaylistsInMilliSconds, Timeout.Infinite);
+                this.changeAutoSetPlaylistTimer(nextAutoSetPlaylistsInMilliSconds);
             }
             else
             {
@@ -531,12 +540,48 @@ namespace Drexel.VidUp.UI.ViewModels
                 messages.Add(StatusInformationCreator.Create("INF0019", $"Autosetting playlists is disabled."));
             }
 
-            this.autoSettingPlaylists = false;
-            this.raisePropertyChanged("AutoSettingPlaylists");
-
             EventAggregator.Instance.Publish(new AutoSettingPlaylistsStateChangedMessage(success, StatusInformationToStringConverter.GetStatusInformationString(messages, true, false)));
 
             Tracer.Write($"PlaylistRibbonViewModel.autoSetPlaylists: End.");
+            }
+            finally
+            {
+                //the guard was released at the end without a finally before: an
+                //exception in the settings save, the timer rescheduling or the
+                //event publishing left it set forever and autosetting playlists
+                //never ran again (BUG-18)
+                lock (this.autoSetPlaylistsLock)
+                {
+                    this.autoSettingPlaylists = false;
+                }
+
+                this.raisePropertyChanged("AutoSettingPlaylists");
+            }
+        }
+
+        //all timer changes go through here, so they cannot race with the disposal
+        //in Close() and cannot touch the timer after it is disposed (BUG-18)
+        private void changeAutoSetPlaylistTimer(int dueTimeInMilliSeconds)
+        {
+            lock (this.autoSetPlaylistsLock)
+            {
+                if (!this.autoSetPlaylistTimerDisposed)
+                {
+                    this.autoSetPlaylistTimer.Change(dueTimeInMilliSeconds, Timeout.Infinite);
+                }
+            }
+        }
+
+        public void Close()
+        {
+            lock (this.autoSetPlaylistsLock)
+            {
+                this.autoSetPlaylistTimerDisposed = true;
+            }
+
+            //the timer was never disposed before, so callbacks could still run
+            //(API calls, settings saves, events) after the window was closed (BUG-18)
+            this.autoSetPlaylistTimer.Dispose();
         }
 
 
@@ -784,7 +829,7 @@ namespace Drexel.VidUp.UI.ViewModels
             else
             {
                 Tracer.Write($"PlaylistRibbonViewModel.setAutoSetPlaylistsTimer: Autosetting playlists disabled by user, stopping timer.");
-                this.autoSetPlaylistTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                this.changeAutoSetPlaylistTimer(Timeout.Infinite);
             }
         }
 
@@ -805,7 +850,7 @@ namespace Drexel.VidUp.UI.ViewModels
                 Tracer.Write($"PlaylistRibbonViewModel.calculateTimeAndSetAutoSetPlaylistsTimer: Scheduling autosetting playlists in {span.Days * 24 + span.Hours}:{span.Minutes}:{span.Seconds} hours:minutes:seconds.");
 
                 EventAggregator.Instance.Publish(new AutoSettingPlaylistsStateChangedMessage(true, $"Next auto setting playlists: {DateTime.Now.AddMilliseconds(nextAutoSetPlaylistsInMilliSconds)}."));
-                this.autoSetPlaylistTimer.Change(nextAutoSetPlaylistsInMilliSconds, Timeout.Infinite);
+                this.changeAutoSetPlaylistTimer(nextAutoSetPlaylistsInMilliSconds);
             }
         }
     }

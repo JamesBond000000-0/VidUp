@@ -1021,6 +1021,13 @@ namespace Drexel.VidUp.UI.ViewModels
 
         public void Close()
         {
+            //stop the playlist autoset timer, it kept calling the API and saving
+            //settings after the window was closed before (BUG-18)
+            if (this.ribbonViewModels != null && this.ribbonViewModels.Count > 2 && this.ribbonViewModels[2] is PlaylistRibbonViewModel playlistRibbonViewModel)
+            {
+                playlistRibbonViewModel.Close();
+            }
+
             Tracer.Close();
         }
 
