@@ -1473,6 +1473,13 @@ namespace Drexel.VidUp.Business
 
             //current day or no day after (in this week) are enabled in this schedule, so we take first valid day of next week
             dayIndex = Array.IndexOf(this.weeklyDays, true);
+            if (dayIndex < 0)
+            {
+                //no active day at all: without this check a date in the past was
+                //returned as the next date (BUG-12)
+                throw new InvalidScheduleException("No day of the week is active in this schedule.");
+            }
+
             weekIndex = weekIndex + this.weeklyWeekFrequency;
             return Schedule.weeklyGetBeginningOfWeek(this.startDate).AddDays(weekIndex * 7 + dayIndex);
         }
@@ -1517,9 +1524,28 @@ namespace Drexel.VidUp.Business
 
             //current day or no day after (in this month) are enabled in this schedule, so we take first valid day of next month
             int dayIndex = Array.IndexOf(this.monthlyMonthDateBasedDates, true);
+            if (dayIndex < 0)
+            {
+                //no active day at all: without this check a date in the past was
+                //returned as the next date (BUG-12)
+                throw new InvalidScheduleException("No day of the month is active in this schedule.");
+            }
+
             monthIndex = monthIndex + this.monthlyMonthFrequency;
-            nextDate = Schedule.monthlyGetBeginningOfMonth(this.startDate).AddMonths(monthIndex).AddDays(dayIndex);
-            originalDay = dayIndex;
+            DateTime fallbackMonth = Schedule.monthlyGetBeginningOfMonth(this.startDate).AddMonths(monthIndex);
+
+            //the end of month correction applies in the fallback as well, otherwise e.g.
+            //day 30 asked after January 31st landed on March 2nd instead of February 28th (BUG-12)
+            int fallbackMaxDays = DateTime.DaysInMonth(fallbackMonth.Year, fallbackMonth.Month);
+            int fallbackDay = dayIndex;
+            if (fallbackDay + 1 > fallbackMaxDays)
+            {
+                corrected = true;
+                fallbackDay = fallbackMaxDays - 1;
+            }
+
+            nextDate = fallbackMonth.AddDays(fallbackDay);
+            originalDay = dayIndex + 1;
             return corrected;
         }
 
@@ -1530,6 +1556,13 @@ namespace Drexel.VidUp.Business
 
         private KeyValuePair<MonthRelativeCombination, DateTime> monthlyGetNextDateMonthRelativeBased(DateTime dateTime)
         {
+            if (this.monthlyMonthRelativeBasedCombinations.Count == 0)
+            {
+                //an empty combination list (e.g. from JSON data without items) made the
+                //calculation below recurse until the process died (BUG-12)
+                throw new InvalidScheduleException("No month relative day combinations in this schedule.");
+            }
+
             int monthIndex = Schedule.monthlyGetMonthIndex(this.startDate, dateTime);
             int remainder = monthIndex % this.monthlyMonthFrequency;
             if (remainder > 0)
@@ -1539,26 +1572,33 @@ namespace Drexel.VidUp.Business
 
             DateTime monthStart = Schedule.monthlyGetBeginningOfMonth(this.startDate).AddMonths(monthIndex);
 
-            Dictionary<MonthRelativeCombination, DateTime> monthDates = new Dictionary<MonthRelativeCombination, DateTime>();
-            foreach (MonthRelativeCombination monthlyMonthRelativeBasedCombination in this.monthlyMonthRelativeBasedCombinations)
+            //walk the scheduled months until one contains a matching date; combinations
+            //like "fifth Monday" do not exist in every month. The former recursion over
+            //the following months is a bounded loop now (BUG-12).
+            for (int searchedMonths = 0; searchedMonths < 1200; searchedMonths++)
             {
-                DateTime? date = Schedule.monthlyGetDayOfMonth(monthStart,
-                    monthlyMonthRelativeBasedCombination.DayOfWeek, monthlyMonthRelativeBasedCombination.DayPosition);
-
-                if (date != null && !monthDates.Values.Contains(date.Value))
+                Dictionary<MonthRelativeCombination, DateTime> monthDates = new Dictionary<MonthRelativeCombination, DateTime>();
+                foreach (MonthRelativeCombination monthlyMonthRelativeBasedCombination in this.monthlyMonthRelativeBasedCombinations)
                 {
-                    monthDates.Add(monthlyMonthRelativeBasedCombination, date.Value);
+                    DateTime? date = Schedule.monthlyGetDayOfMonth(monthStart,
+                        monthlyMonthRelativeBasedCombination.DayOfWeek, monthlyMonthRelativeBasedCombination.DayPosition);
+
+                    if (date != null && !monthDates.Values.Contains(date.Value))
+                    {
+                        monthDates.Add(monthlyMonthRelativeBasedCombination, date.Value);
+                    }
                 }
+
+                KeyValuePair<MonthRelativeCombination, DateTime>[] orderedMonthDates = monthDates.OrderBy(entry => entry.Value).ToArray();
+                if (orderedMonthDates.Any(entry => entry.Value.Date >= dateTime.Date))
+                {
+                    return orderedMonthDates.First(entry => entry.Value.Date >= dateTime.Date);
+                }
+
+                monthStart = monthStart.AddMonths(this.monthlyMonthFrequency);
             }
 
-            KeyValuePair<MonthRelativeCombination, DateTime>[] orderedMonthDates = monthDates.OrderBy(entry => entry.Value).ToArray();
-            if (orderedMonthDates.Any(entry => entry.Value.Date >= dateTime.Date))
-            {
-                return orderedMonthDates.First(entry => entry.Value.Date >= dateTime.Date);
-                
-            }
-
-            return this.monthlyGetNextDateMonthRelativeBased(monthStart.AddMonths(1));
+            throw new InvalidScheduleException("No matching date found in this schedule.");
         }
 
         private static DateTime? monthlyGetDayOfMonth(DateTime month, DayOfWeek day, DayPosition dayPosition)
