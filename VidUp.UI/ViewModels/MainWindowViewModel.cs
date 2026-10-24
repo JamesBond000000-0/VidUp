@@ -15,6 +15,7 @@ using Drexel.VidUp.Business;
 using Drexel.VidUp.Json.Content;
 using Drexel.VidUp.Json.Settings;
 using Drexel.VidUp.UI.Definitions;
+using System.Runtime.InteropServices;
 using Drexel.VidUp.UI.DllImport;
 using Drexel.VidUp.UI.EventAggregation;
 using Drexel.VidUp.UI.Events;
@@ -844,12 +845,19 @@ namespace Drexel.VidUp.UI.ViewModels
                     {
                         case PostUploadAction.SleepMode:
                             Tracer.Write($"MainWindowViewModel.doPostUploadTasks: Sleep.");
-                            SuspendStateHelper.SetSuspendState(false, false, false);
+                            //a false result was silently ignored before (BUG-31)
+                            if (!SuspendStateHelper.SetSuspendState(false, false, false))
+                            {
+                                Tracer.Write($"MainWindowViewModel.doPostUploadTasks: SetSuspendState for sleep failed with error {Marshal.GetLastWin32Error()}.");
+                            }
                             Tracer.Write($"MainWindowViewModel.doPostUploadTasks: Sleep ended.");
                             break;
                         case PostUploadAction.Hibernate:
                             Tracer.Write($"MainWindowViewModel.doPostUploadTasks: Hibernate.");
-                            SuspendStateHelper.SetSuspendState(true, false, false);
+                            if (!SuspendStateHelper.SetSuspendState(true, false, false))
+                            {
+                                Tracer.Write($"MainWindowViewModel.doPostUploadTasks: SetSuspendState for hibernate failed with error {Marshal.GetLastWin32Error()}.");
+                            }
                             Tracer.Write($"MainWindowViewModel.doPostUploadTasks: Hibernate ended.");
                             break;
                         case PostUploadAction.Shutdown:
