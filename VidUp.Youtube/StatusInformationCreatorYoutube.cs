@@ -15,18 +15,26 @@ namespace Drexel.VidUp.Youtube
             if (e.IsApiResponseError)
             {
                 statusInformationType |= StatusInformationType.AuthenticationApiResponseError;
-                messageAdditional += "Server denied authentication";
-                HttpStatusException httpStatusException = (HttpStatusException) e.InnerException;
-                return new StatusInformation(code, $"{message} {messageAdditional}: {httpStatusException.StatusCode} {httpStatusException.Message} with content '{httpStatusException.Content}'.", statusInformationType);
+                messageAdditional += " Server denied authentication";
+                //pattern match instead of the unchecked cast: a differently
+                //typed or missing inner exception previously replaced the
+                //actual authentication error with a cast/null error (BUG-32)
+                if (e.InnerException is HttpStatusException httpStatusException)
+                {
+                    return new StatusInformation(code, $"{message} {messageAdditional}: {httpStatusException.StatusCode} {httpStatusException.Message} with content '{httpStatusException.Content}'.", statusInformationType);
+                }
             }
 
-            return new StatusInformation(code, $"{message} {messageAdditional}: {e.InnerException.GetType().Name}: {e.InnerException.Message}.", statusInformationType);
+            string innerDescription = e.InnerException != null
+                ? $"{e.InnerException.GetType().Name}: {e.InnerException.Message}"
+                : "no inner exception";
+            return new StatusInformation(code, $"{message} {messageAdditional}: {innerDescription}.", statusInformationType);
         }
 
         public static StatusInformation Create(string code, string source, string message, HttpStatusException e)
         {
             StatusInformationType statusInformationType;
-            if (e.Content.Contains("quotaExceeded"))
+            if (e.Content != null && e.Content.Contains("quotaExceeded"))
             {
                 statusInformationType = StatusInformationType.QuotaError;
             }
