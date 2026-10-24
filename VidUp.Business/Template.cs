@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
+using Drexel.VidUp.Utils;
 using Newtonsoft.Json;
 
 namespace Drexel.VidUp.Business
@@ -545,7 +546,9 @@ namespace Drexel.VidUp.Business
                 DateTime nextDate = this.publishAtSchedule.GetNextDateTime(DateTime.MinValue, false);
                 foreach (Upload upload in relevantUploads)
                 {
-                    if (upload.PublishAt == nextDate)
+                    //compare on minute-normalized values, seconds on a stored
+                    //publish time must not defeat the slot check (BUG-25)
+                    if (upload.PublishAt != null && QuarterHourCalculator.TruncateToMinute(upload.PublishAt.Value) == QuarterHourCalculator.TruncateToMinute(nextDate))
                     {
                         this.publishAtSchedule.UploadedUntil = nextDate;
                         nextDate = this.publishAtSchedule.GetNextDateTime(DateTime.MinValue, false);

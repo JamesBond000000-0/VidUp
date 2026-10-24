@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace Drexel.VidUp.Utils
 {
@@ -6,16 +6,28 @@ namespace Drexel.VidUp.Utils
     {
         public static DateTime GetRoundedToNextQuarterHour(DateTime dateTime)
         {
-            //if minutes are no quarter hour, round up
-            if (dateTime.Minute % 15 != 0)
+            //Always land on an exact quarter hour with zeroed seconds and the
+            //Kind preserved. Previously a time already on a quarter hour kept
+            //its seconds (10:15:37 stayed 10:15:37) while other times were
+            //rounded up with zeroed seconds, and the reconstruction dropped the
+            //Kind, so the results did not reliably match the schedule slots
+            //(seconds = 0) they are compared against (BUG-25).
+            DateTime quarterHour = new DateTime(dateTime.Year, dateTime.Month, dateTime.Day,
+                dateTime.Hour, dateTime.Minute / 15 * 15, 0, dateTime.Kind);
+            if (quarterHour < dateTime)
             {
-                int minutes = dateTime.Minute / 15 * 15 + 15;
-                dateTime = new DateTime(dateTime.Year, dateTime.Month, dateTime.Day, dateTime.Hour, 0, 0);
-                //if minutes are 60, DateTime initialization will fail.
-                dateTime = dateTime.AddMinutes(minutes);
+                quarterHour = quarterHour.AddMinutes(15);
             }
 
-            return dateTime;
+            return quarterHour;
+        }
+
+        //Drops everything below the minute, preserving the Kind. Comparisons of
+        //publish times are done on values normalized this way (BUG-25).
+        public static DateTime TruncateToMinute(DateTime dateTime)
+        {
+            return new DateTime(dateTime.Year, dateTime.Month, dateTime.Day,
+                dateTime.Hour, dateTime.Minute, 0, dateTime.Kind);
         }
     }
 }

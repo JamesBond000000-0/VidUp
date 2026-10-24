@@ -798,7 +798,9 @@ namespace Drexel.VidUp.Business
                                 this.template.Uploads.Where(upload => upload != this).ToArray() :
                                 this.template.Uploads.Where(upload => upload != this && (upload.UploadStart == null || upload.UploadStart > upload.Template.PublishAtSchedule.IgnoreUploadsBefore)).ToArray();
 
-                            if (!relevantUploads.Any(upload => upload.PublishAt == nextPossibleDateTime))
+                            //compare on minute-normalized values, seconds on a stored
+                            //publish time must not defeat the slot check (BUG-25)
+                            if (!relevantUploads.Any(upload => upload.PublishAt != null && QuarterHourCalculator.TruncateToMinute(upload.PublishAt.Value) == QuarterHourCalculator.TruncateToMinute(nextPossibleDateTime)))
                             {
                                 isFree = true;
                             }
