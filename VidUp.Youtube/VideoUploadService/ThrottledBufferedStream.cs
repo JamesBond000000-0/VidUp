@@ -54,21 +54,27 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
         {
             get
             {
-                if (this.bytesPerTimeSlot.Count <= 0)
-                {
-                    return 0;
-                }
-
                 long historyTicks = this.currentTimeSlot - ThrottledBufferedStream.historyForStatsInSeconds * ThrottledBufferedStream.timeSlotMultiplierForSeconds;
                 KeyValuePair<long, int>[] historyBytes;
                 long minTimeSlot;
+                //the count check and the Min() must run under the same lock as
+                //the snapshot: previously the count was read outside the lock
+                //and a concurrent cleanup could empty the dictionary in
+                //between, making Min() throw (BUG-29)
                 lock (this.bytesPerTimeSlot)
                 {
+                    if (this.bytesPerTimeSlot.Count <= 0)
+                    {
+                        return 0;
+                    }
+
                     historyBytes = this.bytesPerTimeSlot.Where(kvp => kvp.Key > historyTicks).ToArray();
                     minTimeSlot = this.bytesPerTimeSlot.Min(kvp => kvp.Key);
                 }
 
-                int sum = historyBytes.Sum(historyByte => historyByte.Value);
+                //long: the int sum overflowed at sustained speeds above
+                //about 143 MB/s within the 15 second history window (BUG-29)
+                long sum = historyBytes.Sum(historyByte => (long)historyByte.Value);
 
 
                 if (minTimeSlot > this.currentTimeSlot - ThrottledBufferedStream.historyForStatsInSeconds * ThrottledBufferedStream.timeSlotMultiplierForSeconds)
@@ -78,7 +84,7 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
                 }
                 else
                 {
-                    return sum / ThrottledBufferedStream.historyForStatsInSeconds;
+                    return (int)(sum / ThrottledBufferedStream.historyForStatsInSeconds);
                 }
             }
         }
@@ -261,9 +267,11 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
 
         private void cleanHistory(long currentTimeSlotInternal)
         {
-            KeyValuePair<long, int>[] outdatedEntries = this.bytesPerTimeSlot.Where(kvp => kvp.Key < currentTimeSlotInternal - ThrottledBufferedStream.keepHistoryForInSeconds * ThrottledBufferedStream.timeSlotMultiplierForSeconds).ToArray();
+            //the enumeration must run under the lock as well, enumerating the
+            //dictionary while another thread adds to it throws (BUG-29)
             lock (this.bytesPerTimeSlot)
             {
+                KeyValuePair<long, int>[] outdatedEntries = this.bytesPerTimeSlot.Where(kvp => kvp.Key < currentTimeSlotInternal - ThrottledBufferedStream.keepHistoryForInSeconds * ThrottledBufferedStream.timeSlotMultiplierForSeconds).ToArray();
                 foreach (var outdatedEntry in outdatedEntries)
                 {
                     this.bytesPerTimeSlot.Remove(outdatedEntry.Key);
@@ -427,11 +435,17 @@ namespace Drexel.VidUp.Youtube.VideoUploadService
             {
                 long minHistoryTimeSlot = currentTimeSlotInternal - ThrottledBufferedStream.historyForUploadInSeconds * ThrottledBufferedStream.timeSlotMultiplierForSeconds;
 
-                var historyBytes = this.bytesPerTimeSlot.Where(kvp => kvp.Key > minHistoryTimeSlot).ToArray();
+                //snapshot under the lock, enumerating the dictionary while
+                //another thread modifies it throws (BUG-29)
+                KeyValuePair<long, int>[] historyBytes;
+                lock (this.bytesPerTimeSlot)
+                {
+                    historyBytes = this.bytesPerTimeSlot.Where(kvp => kvp.Key > minHistoryTimeSlot).ToArray();
+                }
 
                 if (historyBytes.Length > 1)
                 {
-                    long byteCountRead = historyBytes.Sum(kvp => kvp.Value);
+                    long byteCountRead = historyBytes.Sum(kvp => (long)kvp.Value);
 
                     // Calculate the current bytes in the defined history time span for upload speed.
                     long targetBytesInHistory = this.maximumBytesPerSecondRead * ThrottledBufferedStream.historyForUploadInSeconds;

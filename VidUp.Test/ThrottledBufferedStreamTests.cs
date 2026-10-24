@@ -215,5 +215,48 @@ namespace Drexel.VidUp.Test
 
             Assert.That(readTask.Wait(ThrottledBufferedStreamTests.timeout), Is.True, "Read stayed blocked after Dispose.");
         }
+
+        //BUG-29: the speed history was enumerated partly outside its lock, so
+        //polling the speed while reading could throw (dictionary modified
+        //during enumeration, Min() on an emptied history).
+        [Test]
+        public async Task ConcurrentReadAndSpeedPolling_DoesNotThrow()
+        {
+            byte[] data = new byte[4 * 1024 * 1024];
+            new Random(42).NextBytes(data);
+
+            using (ThrottledBufferedStream stream = new ThrottledBufferedStream(new MemoryStream(data), 0, 0))
+            {
+                using (CancellationTokenSource stop = new CancellationTokenSource())
+                {
+                    Task[] pollers = new Task[4];
+                    for (int i = 0; i < pollers.Length; i++)
+                    {
+                        pollers[i] = Task.Run(() =>
+                        {
+                            while (!stop.IsCancellationRequested)
+                            {
+#pragma warning disable CA2022
+                                int speed = stream.CurrentSpeedInBytesPerSecond;
+#pragma warning restore CA2022
+                                Assert.That(speed, Is.GreaterThanOrEqualTo(0));
+                            }
+                        });
+                    }
+
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    long total = 0;
+                    while ((read = await stream.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                    {
+                        total += read;
+                    }
+
+                    stop.Cancel();
+                    await Task.WhenAll(pollers).ConfigureAwait(false);
+                    Assert.That(total, Is.EqualTo(data.Length));
+                }
+            }
+        }
     }
 }
