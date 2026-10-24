@@ -935,7 +935,11 @@ namespace Drexel.VidUp.Business
             if (this.title != null && this.title.Length > YoutubeLimits.TitleLimit || 
                 this.description != null && this.description.Length > YoutubeLimits.DescriptionLimit ||
                 this.TagsCharacterCount > YoutubeLimits.TagsLimit || 
-                this.fileLength > YoutubeLimits.FileSizeLimit)
+                //via the property: the field alone is only filled by the lazy
+                //initialization in the getter, reading it directly here made the
+                //size check dead code (it compared 0) until something else had
+                //read FileLength first (BUG-26)
+                this.FileLength > YoutubeLimits.FileSizeLimit)
             {
                 return false;
             }
