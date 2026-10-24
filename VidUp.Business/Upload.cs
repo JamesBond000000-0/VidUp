@@ -816,6 +816,14 @@ namespace Drexel.VidUp.Business
 
         public void SetPublishAtTime(TimeSpan quarterHour)
         {
+            //without a publish date there is no date part to combine the time
+            //with; previously this threw a NullReferenceException (BUG-27,
+            //SetPublishAtDate handles the null case already)
+            if (this.publishAt == null)
+            {
+                return;
+            }
+
             this.publishAt = new DateTime(this.publishAt.Value.Year, this.publishAt.Value.Month, this.publishAt.Value.Day, quarterHour.Hours, quarterHour.Minutes, 0);
 
             this.LastModified = DateTime.Now;
