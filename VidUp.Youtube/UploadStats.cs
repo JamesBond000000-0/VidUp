@@ -37,25 +37,32 @@ namespace Drexel.VidUp.Youtube
         private SemaphoreSlim statsGate;
 
         public float TotalProgressPercentage
-        { 
+        {
             get
             {
                 if(uploadFinished)
                 {
                     return 1;
                 }
-                else
+
+                //without uploads there is no denominator; dividing by zero here
+                //produced NaN / infinity, which the UI turned into garbage
+                //values (BUG-28)
+                if (this.totalRemainingBytes <= 0)
                 {
-                    return (this.totalBytesSent + (this.currentUpload.BytesSent - this.currentUploadBytesSentInitial)) / (float)this.totalRemainingBytes;
+                    return 0;
                 }
-            } 
+
+                long currentUploadSent = this.currentUpload != null ? this.currentUpload.BytesSent - this.currentUploadBytesSentInitial : 0;
+                return (this.totalBytesSent + currentUploadSent) / (float)this.totalRemainingBytes;
+            }
         }
 
-        public TimeSpan? CurrentFileTimeLeft 
-        { 
+        public TimeSpan? CurrentFileTimeLeft
+        {
             get
             {
-                if (this.currentUploadSpeedInBytesPerSecond > 0)
+                if (this.currentUpload != null && this.currentUploadSpeedInBytesPerSecond > 0)
                 {
                     float seconds = (this.currentUpload.FileLength - this.currentUpload.BytesSent) / (float) this.currentUploadSpeedInBytesPerSecond;
                     return TimeSpan.FromSeconds(seconds);
@@ -68,13 +75,31 @@ namespace Drexel.VidUp.Youtube
         {
             get
             {
+                if (this.currentUpload == null)
+                {
+                    return 0;
+                }
+
                 return (int)((float)(this.currentUpload.FileLength - this.currentUpload.BytesSent) / Constants.ByteMegaByteFactor);
             }
         }
         public int CurrentFilePercent
-        { 
+        {
             get
             {
+                if (this.currentUpload == null)
+                {
+                    return 0;
+                }
+
+                //a zero byte file is trivially complete; dividing by its length
+                //produced NaN, which the int cast turned into an arbitrary
+                //value (BUG-28)
+                if (this.currentUpload.FileLength <= 0)
+                {
+                    return 100;
+                }
+
                 return (int)((float)this.currentUpload.BytesSent / this.currentUpload.FileLength * 100);
             }
         }
@@ -177,7 +202,10 @@ namespace Drexel.VidUp.Youtube
         {
             if (this.currentUpload != null)
             {
-                this.totalBytesSent += this.currentUpload.FileLength - this.currentUploadBytesSentInitial;
+                //only the bytes actually sent count towards the progress; adding
+                //the full file length also credited failed or stopped uploads
+                //with bytes that never left the machine (BUG-28)
+                this.totalBytesSent += this.currentUpload.BytesSent - this.currentUploadBytesSentInitial;
                 this.totalFileLengthProcessed += this.currentUpload.FileLength;
                 this.uploaded.Add(this.currentUpload);
             }
