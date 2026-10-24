@@ -164,3 +164,22 @@ Linux VM 上に Wine 9.0（Ubuntu 24.04 パッケージ）+ Xvfb の環境を構
 - 新規テスト13件（TokenResponseParser 7件、HttpHelper 並行 2件、API 応答 DTO 4件）。UploadStats のゲート契約テスト（BUG-06 由来）は SemaphoreSlim 用に更新。Wine 上の全テスト実行で **102/102 合格**（従来89 + 新規13）。
 - 全7プロジェクト 0 エラー。警告数はベースラインと完全一致（UI 171 / Test 176 / Youtube 7 含む）。
 - 未実施（実アカウントが必要なため）: 実ログインでの確認、停止操作のフェーズ別手動確認、Uploader 再利用の単体テスト（再利用は「セッションごとに新しい tokenSource」という構成で担保し、UI は現行でも Uploader を毎回生成している）。
+
+## 12. Phase 7 実施結果（2026-10-24、残件: BUG-20/24/25/26/27/28/29/30/31/32）
+
+これで BUGFIX_PLAN の全フェーズ完了。変更（BUG 単位で10コミット）:
+- BUG-24: MB 換算定数のタイポ（1048567 → 1048576）を修正。
+- BUG-25: QuarterHourCalculator を「常に秒以下を落とした15分単位の天井・Kind 保持」に統一し、TruncateToMinute を追加。利用箇所の等価比較（Upload の空き枠判定、Template の UploadedUntil 前進判定）は分単位に正規化してから比較する。
+- BUG-26: VerifyForUpload のサイズチェックが遅延初期化前のフィールド（常に0）を見ていたデッドコードを、プロパティ経由に是正。
+- BUG-27: SetPublishAtTime に PublishAt 未設定時のガードを追加（従来は NRE）。
+- BUG-28: UploadStats の進捗累積を実送信バイト数に変更（失敗分を満額加算していた）。分母0・currentUpload なし・0バイトファイルのゼロ除算/NaN をガード。
+- BUG-29: スロットル履歴の列挙（速度取得・履歴掃除・スロットル判定）をすべてロック内へ寄せ、速度合計を long 化（int では約143MB/s 超の持続でオーバーフロー）。判定が「読む前・過去分のみ」なのは仕様として据え置き。
+- BUG-30: Tracer の静的コンストラクタを廃止し遅延初期化化。初期化失敗でも Write は例外を投げない。古いトレース削除はファイル名（タイムスタンプ）順に並べ替えてから実施（従来は取得順の Reverse 頼み）。削除処理は PruneOldTraceFiles として切り出し。
+- BUG-31: ShutDownHelper の全 P/Invoke 結果を確認し失敗を Tracer に記録、トークンハンドルを CloseHandle。SetSuspendState の呼び出し側も false を記録する。
+- BUG-32: StatusInformationCreatorYoutube の無検証キャストと null 前提の GetType() をパターンマッチ+null ガードに是正（文言の空白欠落も是正）。計画書の認証側文言反転は Phase 6 の BUG-10 で是正済み。
+- BUG-20（段階是正）: ダイアログ結果の (bool) キャスト全10箇所を is bool パターン化（結果なしで閉じるとキャンセル扱い）。async void 入口12箇所を「Task 化した Core + 例外を Tracer に記録するラッパ」に分離し、残る async void も内部で例外処理済みのものだけになった（serializeandExecute/startUploadingAsync/signIn は既存の try/catch、autoSetPlaylistsAsync には catch を追加）。ConfigureAwait(false) の後にコレクション変更・イベント発行が続く3箇所は ConfigureAwait を外した。本家方針どおり async void 自体の全廃はしていない（イベント/コマンド入口のシグネチャ維持）。
+
+検証:
+- 新規テスト24件（Constants 2、QuarterHourCalculator 6、UploadVerify 4、UploadStats +3、ThrottledBufferedStream 並行ストレス 1、Tracer 3、StatusInformationCreator 5）。Wine 上の全テスト実行で **126/126 合格**。
+- 全7プロジェクト 0 エラー。警告数はベースラインと完全一致（UI 171 / Test 176 ほか）。
+- 未実施（実機が必要）: BUG-31 の電源操作の実挙動、BUG-20 の UI 操作感、Phase 6 から持ち越しの実ログイン確認と停止操作のフェーズ別確認。これらが残る唯一の未確認事項で、コード上の対応は全 BUG（01〜32）完了した。
