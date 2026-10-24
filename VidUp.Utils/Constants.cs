@@ -2,6 +2,7 @@
 {
     public class Constants
     {
-        public const int ByteMegaByteFactor = 1048567;
+        //2^20; was 1048567 (a typo) until BUG-24, which skewed every MB display
+        public const int ByteMegaByteFactor = 1048576;
     }
 }
