@@ -1,0 +1,116 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:VidUp.Desktop.ViewModels"
+        x:Class="VidUp.Desktop.Views.MainWindow"
+        x:DataType="vm:ShellViewModel"
+        Title="VidUp — Avalonia GUI Preview"
+        Width="1280" Height="800" MinWidth="800" MinHeight="560"
+        FontSize="14">
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20" RowSpacing="12">
+    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+      <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+        <TextBlock Text="VidUp" Classes="heading" />
+        <TextBlock Text="GUI PREVIEW" Classes="muted" VerticalAlignment="Center" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="外観" VerticalAlignment="Center" />
+        <ComboBox x:Name="ThemePicker" Width="150" SelectedIndex="0"
+                  SelectionChanged="ThemeChanged" AutomationProperties.Name="外観テーマ">
+          <ComboBoxItem Content="システムに合わせる" />
+          <ComboBoxItem Content="ライト" />
+          <ComboBoxItem Content="ダーク" />
+        </ComboBox>
+      </StackPanel>
+    </Grid>
+    <Border Grid.Row="1" Classes="panel">
+      <TextBlock Text="安全なUI試作版です。認証・アップロード・既存プロファイルの読み書きは行いません。"
+                 TextWrapping="Wrap" />
+    </Border>
+    <Grid Grid.Row="2" ColumnDefinitions="180,*" ColumnSpacing="16">
+      <Border Classes="panel" Padding="8">
+        <ListBox ItemsSource="{Binding Sections}" SelectedItem="{Binding SelectedSection}"
+                 AutomationProperties.Name="メインナビゲーション" />
+      </Border>
+      <Grid Grid.Column="1">
+        <Grid IsVisible="{Binding IsUploadSection}" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="12">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <TextBlock Text="アップロード" Classes="heading" VerticalAlignment="Center" />
+            <WrapPanel Grid.Column="1" Orientation="Horizontal">
+              <Button Content="動画を追加" Click="AddVideos" Margin="0,0,8,0" />
+              <Button Content="開始（未実装）" IsEnabled="False" ToolTip.Tip="この試作版は動画を送信しません" />
+            </WrapPanel>
+          </Grid>
+          <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <TextBox Text="{Binding SearchText, Mode=TwoWay}" Watermark="動画名・アカウントで検索"
+                     AutomationProperties.Name="動画を検索" />
+            <Button Grid.Column="1" Content="プレビューをクリア" Click="ClearPreview" />
+          </Grid>
+          <Grid Grid.Row="2" x:Name="QueueLayout" ColumnDefinitions="*,320" ColumnSpacing="12">
+            <Border Classes="panel" Padding="8" DragDrop.AllowDrop="True"
+                    DragDrop.DragOver="QueueDragOver" DragDrop.Drop="QueueDrop">
+              <Grid RowDefinitions="Auto,*,Auto" RowSpacing="8">
+                <TextBlock Text="動画キュー · 選択して詳細を確認" Margin="8" FontWeight="SemiBold" />
+                <Grid Grid.Row="1">
+                  <ListBox ItemsSource="{Binding VisibleVideos}" SelectedItem="{Binding SelectedVideo}"
+                           AutomationProperties.Name="動画キュー"
+                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemsPanel>
+                      <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:VideoItem">
+                        <Grid RowDefinitions="Auto,Auto,Auto" Margin="4,8" RowSpacing="4">
+                          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                          <TextBlock Grid.Row="1" Text="{Binding Account}" Classes="muted" TextTrimming="CharacterEllipsis" />
+                          <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12">
+                            <TextBlock Text="{Binding Status}" />
+                            <TextBlock Text="{Binding PublishAt}" Classes="muted" />
+                          </StackPanel>
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <TextBlock Text="表示する動画がありません。動画を追加するか検索条件を変更してください。"
+                             IsVisible="{Binding IsEmpty}" TextWrapping="Wrap" Margin="16"
+                             VerticalAlignment="Center" IsHitTestVisible="False" />
+                </Grid>
+                <TextBlock Grid.Row="2" Text="ここへ動画ファイルをドロップできます" Classes="muted"
+                           TextWrapping="Wrap" Margin="8" />
+              </Grid>
+            </Border>
+            <Border Grid.Column="1" x:Name="DetailsPane" Classes="panel">
+              <ScrollViewer>
+                <StackPanel Spacing="12">
+                  <TextBlock Text="動画の詳細" FontWeight="SemiBold" FontSize="18" />
+                  <TextBlock Text="読取専用 · 編集・保存は後続の実装で対応" Classes="muted" TextWrapping="Wrap" />
+                  <TextBlock Text="タイトル" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedVideo.Title}" TextWrapping="Wrap" />
+                  <TextBlock Text="ファイル" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedVideo.FilePath}" TextWrapping="Wrap" />
+                  <TextBlock Text="送信先アカウント" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedVideo.Account}" TextWrapping="Wrap" />
+                  <TextBlock Text="テンプレート" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedVideo.Template}" TextWrapping="Wrap" />
+                  <TextBlock Text="公開日時" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedVideo.PublishAt}" TextWrapping="Wrap" />
+                  <TextBlock Text="状態" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedVideo.Status}" TextWrapping="Wrap" />
+                </StackPanel>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+          <TextBlock Grid.Row="3" Text="{Binding QueueSummary}" Classes="muted" />
+        </Grid>
+        <Border IsVisible="{Binding IsPlaceholderSection}" Classes="panel">
+          <StackPanel Spacing="16">
+            <TextBlock Text="{Binding SelectedSection}" Classes="heading" />
+            <TextBlock Text="この画面は今後の移行で実装します。現在はナビゲーションの確認用です。"
+                       TextWrapping="Wrap" />
+            <TextBlock Text="既存のWPF版は引き続き利用できます。" Classes="muted" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Grid>
+    <TextBlock Grid.Row="3" Text="{Binding Notice}" TextWrapping="Wrap" />
+  </Grid>
+</Window>

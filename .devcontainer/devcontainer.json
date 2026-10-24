@@ -1,0 +1,16 @@
+{
+  "name": "VidUp Avalonia (.NET 10)",
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
+  "containerEnv": {
+    "NUGET_PACKAGES": "/root/.nuget/packages"
+  },
+  "mounts": [
+    "source=vidup-nuget-packages,target=/root/.nuget/packages,type=volume"
+  ],
+  "postCreateCommand": "dotnet restore VidUp.Desktop.Tests/VidUp.Desktop.Tests.csproj",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-dotnettools.csharp", "AvaloniaTeam.vscode-avalonia"]
+    }
+  }
+}

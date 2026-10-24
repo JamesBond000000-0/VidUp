@@ -14,6 +14,13 @@ https://www.vidup.info/
 https://twitter.com/DrexelsVidUp
 https://letsplayforum.de/thread/178125-drexel-s-vidup-ein-templatebasierter-youtube-uploader/ (German language sorry!)
 
+## Design documents
+
+- [Avalonia移行・GUI近代化設計書（日本語）](docs/AVALONIA_MIGRATION_DESIGN.md)
+- [Avalonia GUI Previewの起動・確認手順（日本語）](docs/AVALONIA_PREVIEW.md)
+- [Avalonia開発環境のセットアップ（日本語）](docs/DEVELOPMENT_ENVIRONMENT.md)
+- [Avalonia検証・引き継ぎチェックリスト（日本語）](docs/AVALONIA_VERIFICATION_CHECKLIST.md)
+
 ## Signing in when building from source
 
 The source code ships with an empty YouTube API client ID and client secret
