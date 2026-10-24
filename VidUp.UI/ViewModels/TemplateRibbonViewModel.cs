@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Threading.Tasks;
 using Drexel.VidUp.Business;
 using Drexel.VidUp.Json.Content;
 using Drexel.VidUp.UI.Controls;
@@ -108,12 +109,27 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void copyTemplate(TemplateCopyMessage templateCopyMessage)
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.copyTemplateCore(templateCopyMessage);
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"TemplateRibbonViewModel.copyTemplate: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task copyTemplateCore(TemplateCopyMessage templateCopyMessage)
+        {
             var view = new CopyTemplateControl
             {
                 DataContext = new CopyTemplateViewModel(templateCopyMessage.Template.Name, Settings.Instance.TemplateImageFolder)
             };
 
-            bool result = (bool)await DialogHost.Show(view, "RootDialog");
+            bool result = await DialogHost.Show(view, "RootDialog") is bool confirmed && confirmed;
             if (result)
             {
                 CopyTemplateViewModel data = (CopyTemplateViewModel)view.DataContext;
@@ -196,12 +212,27 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void openNewTemplateDialogAsync()
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.openNewTemplateDialogCore();
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"TemplateRibbonViewModel.openNewTemplateDialogAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task openNewTemplateDialogCore()
+        {
             var view = new NewTemplateControl
             {
                 DataContext = new NewTemplateViewModel(Settings.Instance.TemplateImageFolder, this.observableYoutubeAccountViewModels, this.youtubeAccountForCreatingTemplates)
             };
 
-            bool result = (bool)await DialogHost.Show(view, "RootDialog");
+            bool result = await DialogHost.Show(view, "RootDialog") is bool confirmed && confirmed;
             if (result)
             {
                 NewTemplateViewModel data = (NewTemplateViewModel) view.DataContext;
@@ -212,6 +243,21 @@ namespace Drexel.VidUp.UI.ViewModels
         }
 
         private async void displayScheduleAsync()
+        {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.displayScheduleCore();
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"TemplateRibbonViewModel.displayScheduleAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task displayScheduleCore()
         {
             var view = new DisplayScheduleControl
             {

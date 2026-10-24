@@ -1,5 +1,7 @@
 ﻿using System;
 using System.ComponentModel;
+using System.Threading.Tasks;
+using Drexel.VidUp.Utils;
 using Drexel.VidUp.Business;
 using Drexel.VidUp.Json.Content;
 using Drexel.VidUp.UI.Controls;
@@ -80,12 +82,27 @@ namespace Drexel.VidUp.UI.ViewModels
 
         public async void openNewYoutubeAccountDialogAsync(object obj)
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.openNewYoutubeAccountDialogCore(obj);
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"SettingsRibbonViewModel.openNewYoutubeAccountDialogAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task openNewYoutubeAccountDialogCore(object obj)
+        {
             var view = new NewYoutubeAccountControl
             {
                 DataContext = new NewYoutubeAccountViewModel()
             };
 
-            bool result = (bool)await DialogHost.Show(view, "RootDialog");
+            bool result = await DialogHost.Show(view, "RootDialog") is bool confirmed && confirmed;
             if (result)
             {
                 NewYoutubeAccountViewModel data = (NewYoutubeAccountViewModel)view.DataContext;
@@ -100,6 +117,21 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void deleteYoutubeAccountAsync(YoutubeAccountDeleteMessage youtubeAccountDeleteMessage)
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.deleteYoutubeAccountCore(youtubeAccountDeleteMessage);
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"SettingsRibbonViewModel.deleteYoutubeAccountAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task deleteYoutubeAccountCore(YoutubeAccountDeleteMessage youtubeAccountDeleteMessage)
+        {
             if (this.youtubeAccountList.AccountCount <= 1)
             {
                 ConfirmControl control = new ConfirmControl(
@@ -113,7 +145,7 @@ namespace Drexel.VidUp.UI.ViewModels
                     $"WARNING! If you delete an account, all content (uploads, templates, playlists) belonging to this account will be deleted!", true);
 
                 //a collection is change later, so we must return to the Gui thread.
-                bool result = (bool) await DialogHost.Show(control, "RootDialog");
+                bool result = await DialogHost.Show(control, "RootDialog") is bool confirmed && confirmed;
                 if (result)
                 {
                     if (this.observableYoutubeAccountViewModels[0].YoutubeAccount.Name == this.selectedYoutubeAccount.YoutubeAccount.Name)

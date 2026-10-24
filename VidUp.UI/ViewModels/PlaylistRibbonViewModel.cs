@@ -234,13 +234,28 @@ namespace Drexel.VidUp.UI.ViewModels
 
         public async void OpenNewPlaylistDialogAsync()
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.openNewPlaylistDialogCore();
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"PlaylistRibbonViewModel.OpenNewPlaylistDialogAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task openNewPlaylistDialogCore()
+        {
             var view = new NewPlaylistControl
             {
                 DataContext = await NewPlaylistViewModel.Create(
                     this.playlistList.GetReadOnlyPlaylistList().Select(playlist => playlist.PlaylistId).ToList(), this.observableYoutubeAccountViewModels, this.youtubeAccountForRequestingPlaylists)
             };
 
-            bool result = (bool)await DialogHost.Show(view, "RootDialog");
+            bool result = await DialogHost.Show(view, "RootDialog") is bool confirmed && confirmed;
             if (result)
             {
                 NewPlaylistViewModel data = (NewPlaylistViewModel)view.DataContext;
@@ -543,6 +558,12 @@ namespace Drexel.VidUp.UI.ViewModels
             EventAggregator.Instance.Publish(new AutoSettingPlaylistsStateChangedMessage(success, StatusInformationToStringConverter.GetStatusInformationString(messages, true, false)));
 
             Tracer.Write($"PlaylistRibbonViewModel.autoSetPlaylists: End.");
+            }
+            catch (Exception e)
+            {
+                //this runs from a timer as async void: an escaping exception
+                //would crash the app, so it is traced instead (BUG-20)
+                Tracer.Write($"PlaylistRibbonViewModel.autoSetPlaylists: Unexpected exception: {e}");
             }
             finally
             {

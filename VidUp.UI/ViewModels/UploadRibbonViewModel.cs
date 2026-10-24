@@ -898,6 +898,21 @@ namespace Drexel.VidUp.UI.ViewModels
         //parameter skips dialog for testing
         private async void deleteUploadsAsync(bool quick)
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.deleteUploadsCore(quick);
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"UploadRibbonViewModel.deleteUploadsAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task deleteUploadsCore(bool quick)
+        {
             Tracer.Write($"UploadListViewModel.deleteUploads(quick={quick}): Start.");
             bool remove = true;
 
@@ -910,7 +925,7 @@ namespace Drexel.VidUp.UI.ViewModels
                         $"Do you really want to remove all uploads with template = '{this.deleteSelectedTemplate.Template.Name}' and status = '{new UplStatusStringValuesConverter().Convert(this.deleteSelectedUploadStatus, typeof(string), null, CultureInfo.CurrentCulture)}'?",
                         true);
 
-                    remove = (bool)await DialogHost.Show(control, "RootDialog");
+                    remove = await DialogHost.Show(control, "RootDialog") is bool confirmed && confirmed;
                 }
             }
             
@@ -930,12 +945,27 @@ namespace Drexel.VidUp.UI.ViewModels
         //parameter skips dialog for testing
         private async void resetUploadStatusAsync()
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.resetUploadStatusCore();
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"UploadRibbonViewModel.resetUploadStatusAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task resetUploadStatusCore()
+        {
             bool reset = true;
             ConfirmControl control = new ConfirmControl(
                 $"Do you really want to reset all uploads with template = '{this.resetWithSelectedTemplate.Template.Name}' and status = '{new UplStatusStringValuesConverter().Convert(this.resetWithSelectedUploadStatus, typeof(string), null, CultureInfo.CurrentCulture)}' to status '{new UplStatusStringValuesConverter().Convert(this.resetToSelectedUploadStatus, typeof(string), null, CultureInfo.CurrentCulture)}'? Ready for Upload will restart begun uploads.",
                 true);
 
-            reset = (bool)await DialogHost.Show(control, "RootDialog").ConfigureAwait(false);
+            reset = await DialogHost.Show(control, "RootDialog") is bool confirmed && confirmed;
             
             if (reset)
             {
@@ -945,11 +975,26 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void resetAttributesAsync()
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.resetAttributesCore();
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"UploadRibbonViewModel.resetAttributesAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task resetAttributesCore()
+        {
             ConfirmControl control = new ConfirmControl(
                 $"Do you really want to reset attributes to template value with attribute = '{new EnumConverter().Convert(this.resetAttributeSelectedAttribute, typeof(string), null, CultureInfo.CurrentCulture)}' on all uploads with template = '{this.resetAttributeSelectedTemplate.Template.Name}' ?",
                 true);
 
-            bool reset = (bool)await DialogHost.Show(control, "RootDialog").ConfigureAwait(false);
+            bool reset = await DialogHost.Show(control, "RootDialog") is bool confirmed && confirmed;
             
 
             if (reset)

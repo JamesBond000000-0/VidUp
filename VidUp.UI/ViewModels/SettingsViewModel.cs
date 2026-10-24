@@ -390,7 +390,7 @@ namespace Drexel.VidUp.UI.ViewModels
                 Tracer.Write($"SettingsViewModel.signInYoutubeAccountAsync: YoutubeAuthentication.SetRefreshTokenOnYoutubeAccountAsync Exception: {e.ToString()}.");
                 ConfirmControl control = new ConfirmControl($"{message}: {e.GetType().Name}: {e.Message}.", false);
 
-                await DialogHost.Show(control, "RootDialog").ConfigureAwait(false);
+                await DialogHost.Show(control, "RootDialog");
             }
 
             this.authenticatingYoutubeAccount = false;

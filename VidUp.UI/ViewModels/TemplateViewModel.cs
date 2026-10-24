@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Threading.Tasks;
+using Drexel.VidUp.Utils;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -141,12 +143,27 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void confirmAccountChange(YoutubeAccount youtubeAccount)
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.confirmAccountChangeCore(youtubeAccount);
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"TemplateViewModel.confirmAccountChange: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task confirmAccountChangeCore(YoutubeAccount youtubeAccount)
+        {
             ConfirmControl control = new ConfirmControl(
                 $"WARNING! If you change the account, template will be removed from all uploads belonging to this template until now!",
                 true);
 
             //a collection is change later, so we must return to the Gui thread.
-            bool result = (bool) await DialogHost.Show(control, "RootDialog");
+            bool result = await DialogHost.Show(control, "RootDialog") is bool confirmed && confirmed;
 
             if (result)
             {
@@ -748,6 +765,21 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void showFinishedUploads()
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.showFinishedUploadsCore();
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"TemplateViewModel.showFinishedUploads: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task showFinishedUploadsCore()
+        {
             StringBuilder dialogContent = new StringBuilder();
             dialogContent.AppendLine("Video Id | Title | Exists on YouTube");
             foreach (Upload upload in this.template.Uploads)
@@ -928,12 +960,27 @@ namespace Drexel.VidUp.UI.ViewModels
 
         private async void openPublishAtAsync()
         {
+            //async void entry point: an escaping exception would crash the app
+            //via the global handler, so the work runs as a Task behind this
+            //guard and failures are traced instead (BUG-20)
+            try
+            {
+                await this.openPublishAtCore();
+            }
+            catch (Exception e)
+            {
+                Tracer.Write($"TemplateViewModel.openPublishAtAsync: Unexpected exception in async entry point: {e}");
+            }
+        }
+
+        private async Task openPublishAtCore()
+        {
             var view = new PublishAtScheduleControl
             {
                 DataContext = new PublishAtScheduleViewModel(this.template.PublishAtSchedule)
             };
 
-            bool result = (bool)await DialogHost.Show(view, "RootDialog");
+            bool result = await DialogHost.Show(view, "RootDialog") is bool confirmed && confirmed;
             if (result)
             {
                 PublishAtScheduleViewModel data = (PublishAtScheduleViewModel)view.DataContext;
